@@ -1,3 +1,5 @@
 *.ipynb_checkpoints/
+
 data/
 
+pose_extraction/mission_records/
