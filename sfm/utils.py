@@ -5,8 +5,6 @@ import numpy as np
 import pandas as pd
 import sys
 
-from mpl_toolkits.mplot3d import Axes3D
-
 
 # Building camera intrinsics K, extrinsics [R|t] and full projection P = K [R|t]
 def camera_matrices_from_pose(position_xyz, yaw_deg, pitch_deg, roll_deg=0.0, image_width=640, image_height=360, horizontal_fov_deg=70.0):
@@ -182,7 +180,7 @@ def filter_matches(kps1, kps2, matches, K, ransac_thresh=1.0, \
     return inlier_matches, E, mask
 
 
-# Triangulating matches to find 3D points
+# Triangulating (pair of) matches to find 3D points
 def triangulate_matches(P1, P2, kps1, kps2, matches):
     # Collect matched 2D points in pixel coordinates
     pts1 = np.array([kps1[m.queryIdx].pt for m in matches])
@@ -195,112 +193,211 @@ def triangulate_matches(P1, P2, kps1, kps2, matches):
     points_3d = (points_4d[:3] / points_4d[3]).T
     return points_3d
 
+
+# Helper function to find a track that already has kp in frame f with 
+# index kp_idx
+def _find_track_with_kp(tracks, frame_idx, kp_idx):
+    for tr in tracks:
+        if tr.get(frame_idx, None) == kp_idx:
+            return tr
+    return None
+
+
+# Building tracking dictionaries for each keypoint so we know in which
+# frames to find any object
+def build_tracks_from_pairs(pair_matches, min_length=3):
+    if len(pair_matches) == 0:
+        return []
+
+    # Initializing tracks with first pair of matches
+    tracks = [] 
+    for m in pair_matches[0]:
+        tr = {0: m.queryIdx, 1: m.trainIdx}
+        tracks.append(tr)
+
+    # Extending with other pair of matches
+    for i in range(len(pair_matches)-1):
+        for m in pair_matches[i+1]:
+            kp1 = m.queryIdx
+            kp2 = m.trainIdx
+
+            # Extending existing track to next frame
+            tr = _find_track_with_kp(tracks, i+1, kp1)
+            if tr is not None:
+                if i+2 not in tr:
+                    tr[i+2] = kp2
+            
+            # Starting a new (shorter) track
+            else:
+                tracks.append({i+1: kp1, i+2: kp2})
+
+    # Keeping only tracks with enough observations
+    tracked = [tr for tr in tracks if len(tr) >= min_length]
+    return tracks
+
+
+# Triangulating multi-view tracks to find 3D points
+def triangulate_track_multi_view(Ps, keypoints_list, track):
+    # Manually constructing matrix A
+    A_rows = []
+    for f_idx, kp_idx in sorted(track.items()):
+        P = Ps[f_idx]
+        kps = keypoints_list[f_idx]
+        u, v = kps[kp_idx].pt
+
+        # Rows for each pixel: 
+        # u * P[2,:] - P[0,:]
+        # v * P[2,:] - P[1,:]
+        A_rows.append(u * P[2, :] - P[0, :])
+        A_rows.append(v * P[2, :] - P[1, :])
+
+    A = np.stack(A_rows, axis=0)
+
+    # Solving AX = 0 with SVD and going from homogenous coordinates to 
+    # 3D points
+    _, _, Vt = np.linalg.svd(A)
+    X_h = Vt[-1]
+    X_h /= X_h[3]
+    X = X_h[:3]
+    return X
+
+
 # Testing 3D point cloud generation pipeline
 if __name__ == '__main__':
     try:
         debug = ast.literal_eval(sys.argv[1])
         descriptor = sys.argv[2]
+        start_frame = int(sys.argv[3])
+        num_frames = int(sys.argv[4])
     except:
-        debug = False
+        debug = True
         descriptor = "SIFT"
+        start_frame = 20
+        num_frames = 3
 
     poses_df = pd.read_csv('../data/small_corridor/poses.txt')
     poses_df.columns = ['X', 'Y', 'Z', 'yaw', 'pitch', 'image_path']
     if debug:
-        print("First few poses:")
+        print("\nFirst few poses:")
         print(poses_df.head())
 
     # Getting matrices from poses
-    x1, y1, z1 = poses_df['X'].iloc[20], poses_df['Y'].iloc[20], \
-                 poses_df['Z'].iloc[20]
-    yaw1, pitch1, roll1 = poses_df['yaw'].iloc[20], \
-                          poses_df['pitch'].iloc[20], 0.0
-    
-    x2, y2, z2 = poses_df['X'].iloc[22], poses_df['Y'].iloc[22], \
-                 poses_df['Z'].iloc[22]
-    yaw2, pitch2, roll2 = poses_df['yaw'].iloc[22], \
-                          poses_df['pitch'].iloc[22], 0.0
-    
     image_width, image_height = 640, 360
     horizontal_fov_deg = 70.0
+
+    Ks = []
+    Rs = []
+    ts = []
+    Ps = []
+    cameras_centers = []
+    frame_indices = [start_frame + i for i in range(num_frames)]
+    for idx in frame_indices:
+        x = poses_df['X'].iloc[idx]
+        y = poses_df['Y'].iloc[idx]
+        z = poses_df['Z'].iloc[idx]
+        yaw = poses_df['yaw'].iloc[idx]
+        pitch = poses_df['pitch'].iloc[idx]
+        roll = 0.0
+
+        K, R, t, P = camera_matrices_from_pose(
+            [x, y, z], yaw, pitch, roll,
+            image_width, image_height, horizontal_fov_deg
+        )
+
+        Ks.append(K)
+        Rs.append(R)
+        ts.append(t)
+        Ps.append(P)
+        cameras_centers.append(np.array([x, y, z], dtype=float))
     
-    K, R1, t1, P1 = camera_matrices_from_pose([x1, y1, z1], yaw1, pitch1, \
-                                              roll1, image_width, \
-                                              image_height, \
-                                              horizontal_fov_deg)
-    _, R2, t2, P2 = camera_matrices_from_pose([x2, y2, z2], yaw2, pitch2, \
-                                              roll1, image_width, \
-                                              image_height, \
-                                              horizontal_fov_deg)
+    #Because are the Ks are the same
+    K = Ks[0]
 
     if debug:
         # Sanity checking camera matrices
-        print(f'Intrinsics K:\n{K}\n')
-        print(f'Rotation R:\n{R1}\n')
-        print(f'Translation t:\n{t1}\n')
-        print(f'Projection P:\n{P1}\n')
+        print(f'\nIntrinsics K:\n{K}\n')
+        print(f'Rotation R:\n{Rs[-1]}\n')
+        print(f'Translation t:\n{ts[-1]}\n')
+        print(f'Projection P:\n{Ps[-1]}\n')
 
         # Sanity checking math
-        print(f'R^T @ R == I:\n{R1.T @ R1}\n')
-        print(f'det(R) == 1: {np.linalg.det(R1)}\n')
-        print(f'Original camera position: {[x1.item(), y1.item(), z1.item()]}\nCamera center from extrinsics: {-R1.T @ t1}')
+        print(f'R^T @ R == I:\n{Rs[-1].T @ Rs[-1]}\n')
+        print(f'det(R) == 1: {np.linalg.det(Rs[-1])}\n')
+        print(f'Original camera position: {[x.item(), y.item(), z.item()]}\nCamera center from extrinsics: {-Rs[-1].T @ ts[-1]}\n')
 
     # Extracting (and eventually ploting for debugging) image features
-    img_path1 = poses_df['image_path'].iloc[20]
-    img_path2 = poses_df['image_path'].iloc[22]
-    kps1, desc1 = image_feature_extractor(img_path1, descriptor, debug)
-    kps2, desc2 = image_feature_extractor(img_path2, descriptor, False)
-    if debug:
-        print(f"\nNumber of {descriptor} keypoints in image 1: {len(kps1)}")
-        print(f"Number of {descriptor} keypoints in image 2: {len(kps2)}")
-    
+    keypoints_list = []
+    descriptors_list = []
+    images_rgb = []
+    for idx in frame_indices:
+        img_path = poses_df['image_path'].iloc[idx]
+        show_kps = debug and (idx == frame_indices[-1])
+        kps, desc = image_feature_extractor(img_path, descriptor, show_kps)
+        keypoints_list.append(kps)
+        descriptors_list.append(desc)
+
+        img_bgr = cv2.imread(img_path)
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        images_rgb.append(img_rgb)
+
+        if debug:
+            print(f"Frame {idx}: {len(kps)} {descriptor} keypoints")
+
     # Matching image features
-    matches = match_features(kps1, desc1, kps2, desc2, descriptor)
-    if debug:
-        print(f"\nNumber of good matches between images 1 and 2: {len(matches)}")
+    pair_inlier_matches = []
+    for i in range(num_frames - 1):
+        idx1 = frame_indices[i]
+        idx2 = frame_indices[i + 1]
 
-        img_bgr1 = cv2.imread(img_path1)
-        img_rgb1 = cv2.cvtColor(img_bgr1, cv2.COLOR_BGR2RGB)
-        img_bgr2 = cv2.imread(img_path2)
-        img_rgb2 = cv2.cvtColor(img_bgr2, cv2.COLOR_BGR2RGB)
+        print(f"\nPair of frames {idx1} -> {idx2}:")
+        kps1, desc1 = keypoints_list[i], descriptors_list[i]
+        kps2, desc2 = keypoints_list[i + 1], descriptors_list[i + 1]
 
-        matched_img = cv2.drawMatches(
-            img_rgb1, kps1,
-            img_rgb2, kps2,
-            matches, None,
-            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-        )
-
-        plt.figure(figsize=(15,8))
-        plt.imshow(matched_img)
-        plt.axis('off')
-        plt.show()
-
-    inlier_matches, E, mask = filter_matches(kps1, kps2, matches, K)
-    if debug:
-        print(f"\nNumber of matches after RANSAC: {len(inlier_matches)}")
-
-        matched_img = cv2.drawMatches(
-            img_rgb1, kps1,
-            img_rgb2, kps2,
-            inlier_matches, None,
-            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-        )
-
-        plt.figure(figsize=(15,8))
-        plt.imshow(matched_img)
-        plt.axis('off')
-        plt.show()
-    
-    points_3d = triangulate_matches(P1, P2, kps1, kps2, inlier_matches)
-    if debug:
-        C1 = np.array([x1, y1, z1], dtype=float)
-        C2 = np.array([x2, y2, z2], dtype=float)
+        C1, C2 = cameras_centers[i], cameras_centers[i + 1]
         baseline = np.linalg.norm(C2 - C1)
-        print("\nCamera 1 center:", C1)
-        print("Camera 2 center:", C2)
-        print("Baseline (||C2 - C1||):", baseline)
-        print(f"First and last 3D points: {points_3d[0]}, {points_3d[-1]}")
+        print(f"Camera centers distance: {baseline:.3f}")
+        if baseline <= 1e-3:
+            print("Baseline too small, skipping this pair")
+            pair_inlier_matches.append([])
+            continue
+
+        matches = match_features(kps1, desc1, kps2, desc2, descriptor)
+        print(f"Good matches: {len(matches)}")
+
+        inlier_matches, E, mask = filter_matches(kps1, kps2, matches, K)
+        print(f"Inliers after RANSAC: {len(inlier_matches)}\n")
+
+        if debug and len(inlier_matches) > 0 and i == num_frames-2:
+            match_img = cv2.drawMatches(images_rgb[i], kps1, \
+                                        images_rgb[i+1], kps2, \
+                                        inlier_matches, None, \
+                                        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+            plt.figure(figsize=(15, 6))
+            plt.title(f"Inlier matches frames {idx1} <-> {idx2}")
+            plt.imshow(match_img)
+            plt.axis('off')
+            plt.show()
+
+        pair_inlier_matches.append(inlier_matches)
+    
+    # Building multi-view tracks
+    min_length = num_frames
+    tracks = build_tracks_from_pairs(pair_inlier_matches, \
+                                     min_length=min_length)
+    print(f"\nTotal multi-view tracks (len >= 3): {len(tracks)}")
+
+    # 5) Multi-view triangulation: one 3D point per track
+    points_3d = []
+    for tr in tracks:
+        X = triangulate_track_multi_view(Ps, keypoints_list, tr)
+        points_3d.append(X)
+
+    points_3d = np.array(points_3d)
+    print("\nTriangulated multi-view 3D points:", points_3d.shape[0])
+    print(f"First and last 3D points: {points_3d[0]}, {points_3d[-1]}")
+
+    # points_3d = triangulate_matches(P1, P2, kps1, kps2, inlier_matches)
+    if debug:
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')
         ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2])
