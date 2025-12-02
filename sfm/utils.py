@@ -7,7 +7,7 @@ import sys
 
 
 # Building camera intrinsics K, extrinsics [R|t] and full projection P = K [R|t]
-def camera_matrices_from_pose(position_xyz, yaw_deg, pitch_deg, roll_deg=0.0, image_width=640, image_height=360, horizontal_fov_deg=70.0):
+def camera_matrices_from_pose(position_xyz, yaw_deg, pitch_deg, image_width=640, image_height=360, horizontal_fov_deg=70.0):
     # Building intrinsics matrix (camera coords to pixel coords)
     w, h = image_width, image_height
 
@@ -15,9 +15,8 @@ def camera_matrices_from_pose(position_xyz, yaw_deg, pitch_deg, roll_deg=0.0, im
     hFoV = np.deg2rad(horizontal_fov_deg)
     fx = w / (2.0 * np.tan(hFoV / 2.0))
 
-    # Computing vertical FoV from aspect ratio and then vertical focal length
-    vFoV = 2.0 * np.arctan((h / w) * np.tan(hFoV / 2.0))
-    fy = h / (2.0 * np.tan(vFoV / 2.0))
+    # Since we assume square pixels, we can simply do fx = fy
+    fy = fx
 
     # Computing principal point (where the camera's optical axis hits the image)
     cx, cy = w / 2.0, h / 2.0
@@ -27,24 +26,37 @@ def camera_matrices_from_pose(position_xyz, yaw_deg, pitch_deg, roll_deg=0.0, im
                   [0.0, fy, cy],\
                   [0.0, 0.0, 1.0]])
 
-    # Building rotation matrix (world coords to camera coords) in ZYX order
+    # Building rotation matrix by converting Minecraft Angles to an OpenCV 
+    # Camera Basis. Minecraft Inputs:
+    #   Yaw:   0 -> +Z, -90 -> +X, 90 -> -X, 180 -> -Z
+    #   Pitch: -90 -> +Y, 90 -> -Y
     yaw = np.deg2rad(yaw_deg)
     pitch = np.deg2rad(pitch_deg)
-    roll = np.deg2rad(roll_deg)
-
-    Rz = np.array([[ np.cos(yaw), -np.sin(yaw), 0.0],\
-                   [ np.sin(yaw), np.cos(yaw), 0.0],\
-                   [ 0.0, 0.0, 1.0]])
-
-    Ry = np.array([[np.cos(pitch), 0.0, np.sin(pitch)],\
-                   [ 0.0, 1.0, 0.0],\
-                   [-np.sin(pitch), 0.0, np.cos(pitch)]])
-
-    Rx = np.array([[1.0, 0.0, 0.0],\
-                   [0.0, np.cos(roll), -np.sin(roll)],\
-                   [0.0, np.sin(roll), np.cos(roll)]])
     
-    R = Rz @ Ry @ Rx
+    # Calculating the forward vector (OpenCV +Z), the direction the camera 
+    # is looking in World Coordinates, derived from spherical coordinates
+    f_x = -np.sin(yaw) * np.cos(pitch)
+    f_y = -np.sin(pitch)
+    f_z = np.cos(yaw) * np.cos(pitch)
+    forward = np.array([f_x, f_y, f_z])
+    forward = forward / np.linalg.norm(forward)
+
+    # Calculating the right vector (OpenCV +X). Minecraft cameras don't roll,
+    # so right is always perpendicular to Y-axis
+    r_x = -np.cos(yaw) 
+    r_y = 0.0
+    r_z = -np.sin(yaw)
+    right = np.array([r_x, r_y, r_z])
+    right = right / np.linalg.norm(right)
+
+    # Calculating the down vector (OpenCV +Y) as orthogonal to forward and 
+    # right. In OpenCV: right (X) cross forward (Z) = up (-Y), but we want
+    # down (+Y), so we do forward cross right.
+    down = np.cross(forward, right)
+
+    # Building "rotation matrix" (World -> Camera) using the vectors as our 
+    # new basis
+    R = np.array([right, down, forward])
 
     # Building translation matrix
     C = position_xyz
@@ -104,8 +116,8 @@ def image_feature_extractor(img_path, descriptor='SIFT', show=False):
 
 
 # Matching features between consecutive frames
-def match_features(kps1, desc1, kps2, desc2, descriptor="SIFT", \
-                   ratio_thresh=0.8, k=10):
+def match_features(desc1, desc2, descriptor="SIFT", \
+                   ratio_thresh=0.45, k=2):
     # KNN matching (k neighbors for each descriptor in desc1)
     if descriptor == "SIFT":
         norm_type = cv2.NORM_L2
@@ -116,39 +128,15 @@ def match_features(kps1, desc1, kps2, desc2, descriptor="SIFT", \
     knn_matches = bf.knnMatch(desc1, desc2, k=k)
     good_matches = []
 
-    # Classic Lowe ratio test with
+    # Classic Lowe ratio test
     for neighbors in knn_matches:
         if len(neighbors) < 2:
             continue
 
-        # Best candidate neighbor
-        best = neighbors[0]
-        best_kp2 = kps2[best.trainIdx]
-        best_class = best_kp2.class_id
-
-        # Finding the nearest neighbor from a different class_id (if possible)
-        second = None
-        for cand in neighbors[1:]:
-            cand_kp2 = kps2[cand.trainIdx]
-            cand_class = cand_kp2.class_id
-
-            # If class_id is -1 (default) for best, we can't really separate
-            # classes, so any other neighbor can serve as "second"
-            if best_class == -1 or cand_class != best_class:
-                second = cand
-                break
-
-        # If we couldn't find a second from a different class (and 
-        # best_class != -1), fall back to the second-best overall
-        if second is None:
-            if len(neighbors) >= 2:
-                second = neighbors[1]
-            else:
-                continue
-
-        # Accepting best if it's sufficiently better than second
-        if best.distance < ratio_thresh * second.distance:
-            good_matches.append(best)
+        # Keeping m only if it's much better than n
+        m, n = neighbors[0], neighbors[1]
+        if m.distance < ratio_thresh * n.distance:
+            good_matches.append(m)
 
     return good_matches
 
@@ -162,8 +150,8 @@ def filter_matches(kps1, kps2, matches, K, ransac_thresh=1.0, \
         return [], None, None
 
     # Estimating Essential matrix with RANSAC
-    pts1 = np.float32([kps1[m.queryIdx].pt for m in matches])
-    pts2 = np.float32([kps2[m.trainIdx].pt for m in matches])
+    pts1 = np.array([kps1[m.queryIdx].pt for m in matches])
+    pts2 = np.array([kps2[m.trainIdx].pt for m in matches])
 
     E, mask = cv2.findEssentialMat(pts1, pts2, cameraMatrix=K, \
                                    method=cv2.RANSAC, prob=ransac_prob, \
@@ -194,46 +182,46 @@ def triangulate_matches(P1, P2, kps1, kps2, matches):
     return points_3d
 
 
-# Helper function to find a track that already has kp in frame f with 
-# index kp_idx
-def _find_track_with_kp(tracks, frame_idx, kp_idx):
-    for tr in tracks:
-        if tr.get(frame_idx, None) == kp_idx:
-            return tr
-    return None
-
-
 # Building tracking dictionaries for each keypoint so we know in which
 # frames to find any object
 def build_tracks_from_pairs(pair_matches, min_length=3):
     if len(pair_matches) == 0:
         return []
 
-    # Initializing tracks with first pair of matches
-    tracks = [] 
-    for m in pair_matches[0]:
-        tr = {0: m.queryIdx, 1: m.trainIdx}
-        tracks.append(tr)
+    tracks = []
+    kp_to_track = {}
+    for i, matches in enumerate(pair_matches):
+        frame_idx_curr = i
+        frame_idx_next = i+1
 
-    # Extending with other pair of matches
-    for i in range(len(pair_matches)-1):
-        for m in pair_matches[i+1]:
-            kp1 = m.queryIdx
-            kp2 = m.trainIdx
+        for m in matches:
+            kp_curr = m.queryIdx
+            kp_next = m.trainIdx
 
-            # Extending existing track to next frame
-            tr = _find_track_with_kp(tracks, i+1, kp1)
-            if tr is not None:
-                if i+2 not in tr:
-                    tr[i+2] = kp2
+            # Checking if the feature in the current frame is already part 
+            # of a track
+            key = (frame_idx_curr, kp_curr)
+            if key in kp_to_track:
+                # We found an existing track ending here, so we add the 
+                # next frame
+                track = kp_to_track[key]
+                track[frame_idx_next] = kp_next
+                
+                # Updating dictionary
+                kp_to_track[(frame_idx_next, kp_next)] = track
+                del kp_to_track[key]
             
-            # Starting a new (shorter) track
             else:
-                tracks.append({i+1: kp1, i+2: kp2})
+                # Starting a new track
+                new_track = {frame_idx_curr: kp_curr, frame_idx_next: kp_next}
+                tracks.append(new_track)
+                
+                # Updating dictionary
+                kp_to_track[(frame_idx_next, kp_next)] = new_track
 
     # Keeping only tracks with enough observations
-    tracked = [tr for tr in tracks if len(tr) >= min_length]
-    return tracks
+    valid_tracks = [tr for tr in tracks if len(tr) >= min_length]
+    return valid_tracks
 
 
 # Triangulating multi-view tracks to find 3D points
@@ -273,7 +261,7 @@ if __name__ == '__main__':
         debug = True
         descriptor = "SIFT"
         start_frame = 20
-        num_frames = 3
+        num_frames = 2
 
     poses_df = pd.read_csv('../data/small_corridor/poses.txt')
     poses_df.columns = ['X', 'Y', 'Z', 'yaw', 'pitch', 'image_path']
@@ -297,19 +285,17 @@ if __name__ == '__main__':
         z = poses_df['Z'].iloc[idx]
         yaw = poses_df['yaw'].iloc[idx]
         pitch = poses_df['pitch'].iloc[idx]
-        roll = 0.0
 
-        K, R, t, P = camera_matrices_from_pose(
-            [x, y, z], yaw, pitch, roll,
-            image_width, image_height, horizontal_fov_deg
-        )
+        K, R, t, P = camera_matrices_from_pose([x, y, z], yaw, pitch, \
+                                               image_width, image_height, \
+                                               horizontal_fov_deg)
 
         Ks.append(K)
         Rs.append(R)
         ts.append(t)
         Ps.append(P)
         cameras_centers.append(np.array([x, y, z], dtype=float))
-    
+
     #Because are the Ks are the same
     K = Ks[0]
 
@@ -324,6 +310,21 @@ if __name__ == '__main__':
         print(f'R^T @ R == I:\n{Rs[-1].T @ Rs[-1]}\n')
         print(f'det(R) == 1: {np.linalg.det(Rs[-1])}\n')
         print(f'Original camera position: {[x.item(), y.item(), z.item()]}\nCamera center from extrinsics: {-Rs[-1].T @ ts[-1]}\n')
+
+        # Sanity checking camera movement and orientation
+        fig = plt.figure(figsize=(8,8))
+        ax = fig.add_subplot(projection='3d')
+        for i, (C, R) in enumerate(zip(cameras_centers, Rs)):
+            ax.scatter(C[0], C[1], C[2], c='r', marker='o')
+            
+            view_dir = R.T[:, 2] 
+            ax.quiver(C[0], C[1], C[2], view_dir[0], view_dir[1], \
+                      view_dir[2], length=0.05, color='b')
+            
+            ax.text(C[0], C[1], C[2], f"Camera {i}")
+        
+        ax.set_title("Blue arrows should point at where we look during mission")
+        plt.show()
 
     # Extracting (and eventually ploting for debugging) image features
     keypoints_list = []
@@ -361,7 +362,7 @@ if __name__ == '__main__':
             pair_inlier_matches.append([])
             continue
 
-        matches = match_features(kps1, desc1, kps2, desc2, descriptor)
+        matches = match_features(desc1, desc2, descriptor)
         print(f"Good matches: {len(matches)}")
 
         inlier_matches, E, mask = filter_matches(kps1, kps2, matches, K)
@@ -379,24 +380,28 @@ if __name__ == '__main__':
             plt.show()
 
         pair_inlier_matches.append(inlier_matches)
-    
+
+        # Two-view triangulation
+        if num_frames == 2:
+            points_3d = triangulate_matches(Ps[0], Ps[1], kps1, kps2, \
+                                            inlier_matches)
+
     # Building multi-view tracks
     min_length = num_frames
     tracks = build_tracks_from_pairs(pair_inlier_matches, \
-                                     min_length=min_length)
-    print(f"\nTotal multi-view tracks (len >= 3): {len(tracks)}")
+                                     min_length=min_length-1)
+    print(f"\nTotal multi-view tracks: {len(tracks)}")
 
-    # 5) Multi-view triangulation: one 3D point per track
-    points_3d = []
-    for tr in tracks:
-        X = triangulate_track_multi_view(Ps, keypoints_list, tr)
-        points_3d.append(X)
+    # Multi-view triangulation
+    if num_frames > 2:
+        points_3d = []
+        for tr in tracks:
+            X = triangulate_track_multi_view(Ps, keypoints_list, tr)
+            points_3d.append(X)
 
     points_3d = np.array(points_3d)
-    print("\nTriangulated multi-view 3D points:", points_3d.shape[0])
-    print(f"First and last 3D points: {points_3d[0]}, {points_3d[-1]}")
-
-    # points_3d = triangulate_matches(P1, P2, kps1, kps2, inlier_matches)
+    print("\nTriangulated 3D points shape:", points_3d.shape[0])
+    
     if debug:
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')
