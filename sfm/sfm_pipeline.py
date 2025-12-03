@@ -65,17 +65,15 @@ def process_windows(poses_df, descriptor, horizontal_fov_deg, \
         pair_matches.append(inliers)
 
     # Building global tracking (windows)
-    tracks = build_tracks_from_pairs(pair_matches, min_track_length)
+    tracks = build_tracks_from_pairs(pair_matches, min_track_length-1)
 
     # Global multi-view triangulation
     points_3d = []
     colors = []
     for tr in tracks:
         X = triangulate_track_multi_view(Ps, keypoints_list, tr)
-        
-        # Filtering negative Z points (behind the camera)
-        # mask = points_3d[:, 2] < 0
-        # points_3d = points_3d[mask]
+        if X is None:
+            continue
         points_3d.append(X)
         
         # Color Sampling
@@ -88,7 +86,6 @@ def process_windows(poses_df, descriptor, horizontal_fov_deg, \
 
     points_3d = np.array(points_3d)
     colors = np.array(colors)
-
     print(points_3d.shape)
 
     # Filtering out extreme points

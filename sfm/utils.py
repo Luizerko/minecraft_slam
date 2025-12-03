@@ -247,6 +247,15 @@ def triangulate_track_multi_view(Ps, keypoints_list, track):
     X_h = Vt[-1]
     X_h /= X_h[3]
     X = X_h[:3]
+
+    # Checking if the point is in front of the camera (positive Z)
+    first_frame = list(track.keys())[0]
+    P_test = Ps[first_frame]
+    X_homog = np.append(X, 1)
+    projected = P_test @ X_homog
+    if projected[2] < 0:
+        return None
+
     return X
 
 
