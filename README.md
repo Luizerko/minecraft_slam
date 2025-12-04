@@ -11,5 +11,6 @@ SPACE FOR GIF EXAMPLES WHENEVER WE HAVE THEM READY
 ```bash
 .
 ├── pose_extraction/   # Tools and scripts to extract and process camera poses and frames from Minecraft
+├── sfm/   # Classic computer vision Structure from Motion experiments before diving into modern SLAM
 └── slam/              # SLAM algorithms, experiments, and evaluation code
 ```
