@@ -31,9 +31,9 @@ And from the game information, we know that the Minecraft world frame ($\mathcal
 
 - $+\mathbf{Z}_W$: South.
 
-- Yaw: $0^\circ \rightarrow +Z$ and $-90^\circ \rightarrow +X$.
+- Yaw: $0^\circ \rightarrow +Z_W$ and $-90^\circ \rightarrow +X_W$.
 
-- Pitch: $-90^\circ \rightarrow +Y$ and $+90^\circ \rightarrow -Y$.
+- Pitch: $-90^\circ \rightarrow +Y_W$ and $+90^\circ \rightarrow -Y_W$.
 
 We should also consider the camera frame ($\mathcal{F}_C$):
 
@@ -157,3 +157,46 @@ And finally getting to the translation vector $\mathbf{t}$, it represents the po
 $$\mathbf{R} \cdot \mathbf{C}_w + \mathbf{t} = \mathbf{0} \implies$$
 
 $$\implies \mathbf{t} = -\mathbf{R} \cdot \mathbf{C}_w$$
+
+## Feature Extraction and Tracking
+
+Now that we know how to map points in the world to pixels in our images, we move on to the next part: feature extraction and tracking. This chapter documents how we identify specific points in the 3D world from the 2D images (feature extraction) and how we determine that a point in image A is the same physical object as a point in image B (matching and tracking).
+
+### Feature Extraction
+
+We implemented our code with two possible (open-source) feature extractors so we could compare methods. We now introduce them here:
+
+#### Scale-Invariant Feature Transform (SIFT)
+
+To reconstruct the 3D structure, we first need to identify "interesting" points in our 2D images that are invariant to scale, rotation, and illumination changes. We utilize the Scale-Invariant Feature Transform (SIFT).
+
+For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a descriptor vector $\mathbf{d} \in \mathbb{R}^{128}$ for each. These are the multiple steps to get there:
+
+- Scale-Space Construction: The image is convolved with Gaussian filters at different scales to get different zoom perceptions of the image. Then Differences of Gaussians (DoG) are computed to find potential keypoints that are stable across different zoom levels.
+
+- Keypoint Localization: Low-contrast points and edge responses are eliminated to leave only strong "corner-like" features. The former are easy to identify (simply extrema detection), but the latter are a bit more tricky.
+
+    First, a DoG function responds strongly to corners and edges, so why do we remove edges? Edges are bad for tracking because of the aperture problem. Check [this very cool website](https://elvers.us/perception/aperture/) for more details, but basically it states that the local motion information is inherently ambiguous with respect to the global motion for a straight line seen through a small aperture. That is, many different motions could cause the same response visual response for a small receptive field.
+
+    So back to removing edges, SIFT calculates the Hessian Matrix $\mathbf{H}$ at the keypoint location:
+    
+    $$\mathbf{H} =
+    \begin{bmatrix}
+    D_{xx} & D_{xy} \\
+    D_{xy} & D_{yy}
+    \end{bmatrix}$$
+    
+    We then check the ratio of eigenvalues of $\mathbf{H}$. If the ratio is high (one eigenvalue is much bigger than the other), it indicates an edge and we can discard these keypoints. We only keep points where curvature is high (two big and relatively similar eigenvalues) in both directions, which indicates a corner.
+
+- Orientation Assignment: To make the descriptor rotation-invariant, we must assign a dominant direction to the keypoint so we can rotate the world to match it later.
+
+    For that, we take a window around the keypoint depending on the scale $\sigma$. We then compute the gradient magnitude $m(x,y)$ and orientation $\theta(x,y)$ for every pixel in that window and we build a 36-bin histogram (covering 360 degrees in 10 degrees steps). Pixels closer to the center matter more, so we weight the magnitude contributions by a Gaussian window.
+    
+    Sometimes a corner is ambiguous, so if the histogram has a secondary peak that is within 80% of the main peak's height, SIFT creates two separate keypoints at the exact same location $(x,y)$, but with different orientations. This allows the algorithm to try matching both versions.
+
+- Keypoint Descriptor: A $16 \times 16$ neighborhood around the keypoint is taken. It is divided into $16$ sub-blocks of $4 \times 4$ size. For each sub-block, an 8-bin orientation histogram is created, which leads to a $4 \times 4 \times 8 = 128$ element feature vector.This vector $\mathbf{d}$ is the "fingerprint" of that visual feature.
+
+    Notice that there's a difference between the general orientation and the descriptor. The keypoint orientation is the reference frame whereas the descriptor bins are the data. Suppose you didn't do the former. If you took a photo a same intersection for which you already computed SIFT features while hanging upside down, the descriptor would change (also be upside down), and we wouldn't match keypoints that were supposed to be matches.
+
+#### Oriented FAST and Rotated BRIEF (ORB)
+
