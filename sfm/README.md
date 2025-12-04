@@ -125,7 +125,7 @@ This comes from [OpenCV](https://opencv.org/), where $\mathbf{X} \times \mathbf{
 
 <div align="center">
     <br>
-    <img src="assets/rotation_matrix_computation_z.png", width="500">
+    <img src="assets/rotation_matrix_computation_z.png", width="700">
 </div>
 <div align="center">
     <span>Geometric illustration of the camera Z vector getting computed in terms of the world frame to clarify how to get to the above expressions.</span>
@@ -158,17 +158,15 @@ $$\mathbf{R} \cdot \mathbf{C}_w + \mathbf{t} = \mathbf{0} \implies$$
 
 $$\implies \mathbf{t} = -\mathbf{R} \cdot \mathbf{C}_w$$
 
-## Feature Extraction and Tracking
+## Feature Extraction and Matching
 
 Now that we know how to map points in the world to pixels in our images, we move on to the next part: feature extraction and tracking. This chapter documents how we identify specific points in the 3D world from the 2D images (feature extraction) and how we determine that a point in image A is the same physical object as a point in image B (matching and tracking).
 
-### Feature Extraction
-
 We implemented our code with two possible (open-source) feature extractors so we could compare methods. We now introduce them here:
 
-#### Scale-Invariant Feature Transform (SIFT)
+### Scale-Invariant Feature Transform (SIFT)
 
-To reconstruct the 3D structure, we first need to identify "interesting" points in our 2D images that are invariant to scale, rotation, and illumination changes. We utilize the Scale-Invariant Feature Transform (SIFT).
+To reconstruct the 3D structure, we first need to identify "interesting" points in our 2D images that are invariant to scale, rotation, and illumination changes. We utilize the SIFT.
 
 For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a descriptor vector $\mathbf{d} \in \mathbb{R}^{128}$ for each. These are the multiple steps to get there:
 
@@ -192,11 +190,59 @@ For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a
 
     For that, we take a window around the keypoint depending on the scale $\sigma$. We then compute the gradient magnitude $m(x,y)$ and orientation $\theta(x,y)$ for every pixel in that window and we build a 36-bin histogram (covering 360 degrees in 10 degrees steps). Pixels closer to the center matter more, so we weight the magnitude contributions by a Gaussian window.
     
-    Sometimes a corner is ambiguous, so if the histogram has a secondary peak that is within 80% of the main peak's height, SIFT creates two separate keypoints at the exact same location $(x,y)$, but with different orientations. This allows the algorithm to try matching both versions.
+    Sometimes a corner is ambiguous, so if the histogram has a secondary (ore more) peak that is within 80% of the main peak's height, SIFT creates two separate keypoints at the exact same location $(x,y)$, but with different orientations. This allows the algorithm to try matching both versions. To visualize this scenario, think of a dot on a black background. The gradients would point outward in all directions and we would probably get a very flat histogram.
 
 - Keypoint Descriptor: A $16 \times 16$ neighborhood around the keypoint is taken. It is divided into $16$ sub-blocks of $4 \times 4$ size. For each sub-block, an 8-bin orientation histogram is created, which leads to a $4 \times 4 \times 8 = 128$ element feature vector.This vector $\mathbf{d}$ is the "fingerprint" of that visual feature.
 
     Notice that there's a difference between the general orientation and the descriptor. The keypoint orientation is the reference frame whereas the descriptor bins are the data. Suppose you didn't do the former. If you took a photo a same intersection for which you already computed SIFT features while hanging upside down, the descriptor would change (also be upside down), and we wouldn't match keypoints that were supposed to be matches.
 
-#### Oriented FAST and Rotated BRIEF (ORB)
+Given two images $I_a$ and $I_b$, we seek to find corresponding keypoints. We use a K-Nearest Neighbors (k-NN) approach with the Euclidean distance metric ($L_2$ norm). For a descriptor $\mathbf{d}_a$ in image A, we find the two closest descriptors $\mathbf{d}_{b1}, \mathbf{d}_{b2}$ in image B. Then we use Lowe's Ratio Test to reject ambiguous matches: only accept a match if the closest neighbor is significantly closer than the second closest. The concept of significantly closer depends on a chosen trehshold $\alpha$, but the general forumaltion is given by:
 
+$$||\mathbf{d}_a - \mathbf{d}_{b1}|| < \alpha ||\mathbf{d}_a - \mathbf{d}_{b2}||$$
+
+### Oriented FAST and Rotated BRIEF (ORB)
+
+ORB is designed to be a faster, binary alternative to SIFT.
+
+- FAST Detector: It looks at a ring of 16 pixels around a candidate center $p$. If $N$ contiguous pixels are all brighter (or all darker) than $p$ by a threshold $t$, it is a corner. This is fast because it uses simple comparisons, not derivatives.
+
+- Orientation: FAST does not have a natural orientation. ORB adds this by computing the intensity centroid. It calculates the "center of mass" of pixel intensity in a patch. The vector from the geometric center $(0,0)$ to the intensity centroid defines the orientation angle $\theta$.
+
+- BRIEF Descriptor: Unlike SIFT (which stores direction histograms), BRIEF stores bits. It selects 256 random pairs of pixels $(p_1, p_2)$ in the patch. If intensity($p_1$) < intensity($p_2$), write 1, else, write 0. Notice that these 256 pairs are going to be the same across all patches and images, to make sure we can compare them properly later on.
+
+- Rotation: Standard BRIEF is not rotation invariant. ORB uses the angle $\theta$ found by oriented FAST to steer the 256 test pairs. If the pair was originally pixel (10, 0) vs pixel (0, 10), and the orientation is $90^\circ$, we rotate those coordinates by $90^\circ$ before sampling the pixels. Just for completeness, for the previously mentioned pair and rotation, we would get a pixel coordinates (0, 10) and (-10, 0).
+
+For matching, we apply the exact same Lowe's ratio test, but now the descriptor is a string of 1s and 0s, so we measure distances using Hamming (XOR operation), which is much faster for CPUs than SIFT's Euclidean distance.
+
+### Issues Working with Minecraft
+
+While robust in the real world because they were designed for natural images, these descriptors face various challenges in a voxel environment like ours: 
+
+- Texture Repetition: This is the biggest killer. In Minecraft, a dirt block at location A uses the exact same texture file as a dirt block at location B. To SIFT/ORB, these patches look mathematically identical.
+
+- Lack of Scale Variance: Minecraft textures are low-resolution pixel art. When viewed from far away, the high-frequency pixel patterns create [Moiré patterns](https://michaelbach.de/ot/lum-moire1/). A slight camera movement changes the pixel values drastically, altering the gradients SIFT relies on.
+
+Because of that, we had to chose an atypically small $\alpha = 0.45$ to guarantee some kind of proper matching between features, although it highly reduced the amount of matches we ended up with for pairs of images.
+
+<div align="center">
+    <br>
+    <img src="assets/sift_matching.png", width="700">
+</div>
+<div align="center">
+    <span>Illustration of matching result using SIFT features on one of our experiments.</span>
+    <br><br>
+</div>
+
+### Filtering Matches
+
+
+
+### Tracking
+
+A critical architectural decision in our pipeline that had positive impact on the final reconstruction was the move from pairwise matches to global tracks (for later multi-view triangulation). Standard pairwise triangulation treats the pair $(I_1, I_2)$ and $(I_2, I_3)$ as separate universes. If a feature exists in all three frames, naive pairwise logic creates two separate 3D points ($X_{12}$ and $X_{23}$) for the same physical object. This results in ghosting or noise in the final point cloud.
+
+We solve this by building a track list, propagating features across consecutive frames until it's not found anymore. This results in a set of tracks, where a single track $\mathcal{T}$ represents one physical 3D point observed across $N$ consecutive frames
+
+:$$\mathcal{T}_k = \{ (I_{start}, u, v), (I_{start+1}, u', v'), \dots, (I_{end}, u'', v'') \}$$
+
+Although this is far from what modern tracking can do (and what we'll try to explore on other pipelines), it's a simple and fast implementation that already gave us promising results.
