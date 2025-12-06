@@ -117,7 +117,7 @@ def image_feature_extractor(img_path, descriptor='SIFT', show=False):
 
 # Matching features between consecutive frames
 def match_features(desc1, desc2, descriptor="SIFT", \
-                   ratio_thresh=0.45, k=2):
+                   ratio_thresh=0.55, k=2):
     # KNN matching (k neighbors for each descriptor in desc1)
     if descriptor == "SIFT":
         norm_type = cv2.NORM_L2

@@ -196,6 +196,15 @@ For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a
 
     Notice that there's a difference between the general orientation and the descriptor. The keypoint orientation is the reference frame whereas the descriptor bins are the data. Suppose you didn't do the former. If you took a photo a same intersection for which you already computed SIFT features while hanging upside down, the descriptor would change (also be upside down), and we wouldn't match keypoints that were supposed to be matches.
 
+<div align="center">
+    <br>
+    <img src="assets/sift_extractor.png", width="500">
+</div>
+<div align="center">
+    <span>Illustration of SIFT feature extractor on one of our experiments.</span>
+    <br><br>
+</div>
+
 Given two images $I_a$ and $I_b$, we seek to find corresponding keypoints. We use a K-Nearest Neighbors (k-NN) approach with the Euclidean distance metric ($L_2$ norm). For a descriptor $\mathbf{d}_a$ in image A, we find the two closest descriptors $\mathbf{d}_{b1}, \mathbf{d}_{b2}$ in image B. Then we use Lowe's Ratio Test to reject ambiguous matches: only accept a match if the closest neighbor is significantly closer than the second closest. The concept of significantly closer depends on a chosen trehshold $\alpha$, but the general forumaltion is given by:
 
 $$||\mathbf{d}_a - \mathbf{d}_{b1}|| < \alpha ||\mathbf{d}_a - \mathbf{d}_{b2}||$$
@@ -212,6 +221,15 @@ ORB is designed to be a faster, binary alternative to SIFT.
 
 - Rotation: Standard BRIEF is not rotation invariant. ORB uses the angle $\theta$ found by oriented FAST to steer the 256 test pairs. If the pair was originally pixel (10, 0) vs pixel (0, 10), and the orientation is $90^\circ$, we rotate those coordinates by $90^\circ$ before sampling the pixels. Just for completeness, for the previously mentioned pair and rotation, we would get a pixel coordinates (0, 10) and (-10, 0).
 
+<div align="center">
+    <br>
+    <img src="assets/orb_extractor.png", width="500">
+</div>
+<div align="center">
+    <span>Illustration of ORB feature extractor on one of our experiments.</span>
+    <br><br>
+</div>
+
 For matching, we apply the exact same Lowe's ratio test, but now the descriptor is a string of 1s and 0s, so we measure distances using Hamming (XOR operation), which is much faster for CPUs than SIFT's Euclidean distance.
 
 ### Issues Working with Minecraft
@@ -222,27 +240,126 @@ While robust in the real world because they were designed for natural images, th
 
 - Lack of Scale Variance: Minecraft textures are low-resolution pixel art. When viewed from far away, the high-frequency pixel patterns create [Moiré patterns](https://michaelbach.de/ot/lum-moire1/). A slight camera movement changes the pixel values drastically, altering the gradients SIFT relies on.
 
-Because of that, we had to chose an atypically small $\alpha = 0.45$ to guarantee some kind of proper matching between features, although it highly reduced the amount of matches we ended up with for pairs of images.
+Because of that, we had to chose an atypically small $\alpha = 0.55$ to guarantee some kind of proper matching between features, although it highly reduced the amount of matches we ended up with for pairs of images.
+
+### Filtering Matches
+
+The matches produced by the k-NN algorithm are hypothetical. While they look similar in appearance, they may be geometrically impossible (like a pixel on the floor matched to a pixel on the ceiling).
+
+To filter these outliers, we impose a rigid geometric constraint: epipolar geometry. Consider a single 3D point $\mathbf{X}_1$ observed by two cameras with centers $\mathbf{C}_1$ and $\mathbf{C}_2$ (for simplicity, we treat camera 1 as the center of the universe, so the 3D point $\mathbf{X}_1$ is $\mathbf{X}_w$). These three points form a triangle in 3D space. This triangle lies on a specific 2D plane called the epipolar plane. This coplanarity allows us to derive a strict algebraic relationship between the projection of the point in image 1 and image 2.
+
+<div align="center">
+    <br>
+    <img src="assets/epipolar_geometry.png", width="500">
+</div>
+<div align="center">
+    <span>Illustration of the epipolar geometry and epipolar plane.</span>
+    <br><br>
+</div>
+
+Now let $\mathbf{x}_1$ and $\mathbf{x}_2$ be the coordinates of the feature points in **normalized** camera coordinates. We obtain these by removing the camera intrinsics from pixel coordinates:
+
+$$\mathbf{x}_{norm} = \mathbf{K}^{-1} \mathbf{x}_{pixel}$$
+
+It's very important to notice here that $\mathbf{x}_{norm}$ is not exactly a point in space. When doing the forward math from $\mathbf{X}_c = [X, Y, Z]^T$ to $\mathbf{u} = [u, v, 1]^T$, we have:
+
+$$\mathbf{K} \begin{bmatrix} 
+X \\ 
+Y \\ 
+Z
+\end{bmatrix} = \begin{bmatrix} 
+u = f_x X + c_x Z \\ 
+v = f_y Y + c_y Z \\ 
+Z 
+\end{bmatrix} = \lambda \begin{bmatrix} 
+u \\ 
+v \\ 
+1 
+\end{bmatrix}$$
+
+With $\lambda = Z$ encoding the depth information because we have to divide the first two coordinates by it to get to the pixel coordinate. But when doing the back computation, starting from a pixel, we don't have $\lambda$, so we end up with the ratio of the $X$ and $Y$ coordinates with respect to $Z$, but not an actual point in 3D space:
+
+$$\mathbf{K}^{-1} \begin{bmatrix}
+u \\
+v \\ 
+1 
+\end{bmatrix} = \begin{bmatrix} 
+(u - c_x)/f_x \\ 
+(v - c_y)/f_y \\ 
+1 
+\end{bmatrix} = \begin{bmatrix} 
+X / Z \\ 
+Y / Z \\ 
+1 
+\end{bmatrix}$$
+
+So mathematically, $\mathbf{K}^{-1} \mathbf{x}_{pixel}$ gives us the coordinates of the point if the depth was exactly $Z=1$. Since the depth could be anything, this vector represents an infinite line passing through $(0,0,0)$ and $(X/Z, Y/Z, 1)$, which is a ray.
+
+The relationship between the two camera views is defined by a rotation $\mathbf{R}$ and translation $\mathbf{t}$, so a point in the second frame is related to the first frame by rigid body motion:
+
+$$\mathbf{x}_2 = \mathbf{R} \mathbf{x}_1 + \mathbf{t}$$
+
+Note that this holds up to a scale factor since we don't know depth yet, but the vectors point in the same direction. Mathematically, the relationship that involves the true 3D depths is:
+
+$$\lambda_2 \mathbf{x}_2 = \mathbf{R} (\lambda_1 \mathbf{x}_1) + \mathbf{t}$$
+
+And now hold on to your chairs because we are going to do some algebraic massage to this equation until we can eliminate the depth variables we don't know:
+
+$$\lambda_2 \mathbf{x}_2 = \lambda_1 \mathbf{R} \mathbf{x}_1 + \mathbf{t} \underset{\text{Cross product with } \mathbf{t}} \implies$$
+
+$$\implies \mathbf{t} \times (\lambda_2 \mathbf{x}_2) = \mathbf{t} \times (\lambda_1 \mathbf{R} \mathbf{x}_1 + \mathbf{t}) \implies$$
+
+$$\implies \lambda_2 (\mathbf{t} \times \mathbf{x}_2) = \lambda_1 (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) \underset{\text{Dot product with } \mathbf{x}_2} \implies$$
+
+$$\implies \mathbf{x}_2 \cdot [ \lambda_2 (\mathbf{t} \times \mathbf{x}_2) ] = \mathbf{x}_2 \cdot [ \lambda_1 (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) ] \implies$$
+
+$$\implies 0 = \lambda_1 [ \mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) ] \underset{\lambda_1 \text{ cannot be 0 (inside the camera)}} \implies$$
+
+$$\implies \mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) = 0$$
+
+This last equation we just got to is a rewriting of the famous essential matrix equation. We'll use a cross-product simulating matrix and the associative property of matrix multiplication to get:
+
+$$\mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) = \mathbf{x}_2 \cdot ([\mathbf{t}]_\times (\mathbf{R} \mathbf{x}_1)) =$$
+
+$$= \mathbf{x}_2 \cdot (([\mathbf{t}]_\times \mathbf{R}) \mathbf{x}_1) = \mathbf{x}_2^T ([\mathbf{t}]_\times \mathbf{R}) \mathbf{x}_1 =$$
+
+$$= \mathbf{x}_2^T \mathbf{E} \mathbf{x}_1 = 0$$
+
+Where
+
+$$[\mathbf{t}]_\times = \begin{bmatrix} 
+0 & -t_3 & t_2 \\
+t_3 & 0 & -t_1 \\
+-t_2 & t_1 & 0
+\end{bmatrix}$$
+
+Finally getting to the part where we filter points, we start by solving for $\mathbf{E}$. We could do it using all our matches via least squares, but a single outlier would ruin the result. Instead, we use Random Sample Consensus (RANSAC):
+
+- Randomly select the minimum number of points required to solve for $\mathbf{E}$. Since $\mathbf{E}$ has 5 degrees of freedom (3 rotation, 2 translation), we select 5 random matches. Just to ratify why we only have 2 degrees of freedom for translation, remember that scale is unknown. This basically means that if we move the camera 2 center along the ray it shoots on $\mathbf{X}_1$, it won't change $\mathbf{x}_2$, which puts a constraint on the translation vector, reducing one degree of freedom from it.
+
+- Compute a candidate essential matrix $\mathbf{E}_{cand}$ using the [Nister 5-point algorithm](https://www-users.cse.umn.edu/~hspark/CSci5980/nister.pdf). Test all other matches against this candidate. For each match $(\mathbf{x}_1, \mathbf{x}_2)$, we calculate the error: how far is point $\mathbf{x}_2$ from the epipolar line defined by $\mathbf{E}_{cand} \mathbf{x}_1$? If distance is less than a threshold (normally 1 or less), count it as an inlier.
+
+- Repeat the previous steps $N$ iterations and keep the $\mathbf{E}$ that produced the highest number of inliers. Then re-calculate the final $\mathbf{E}$ using only those inliers for maximum precision. The result is a boolean mask. Matches that fit the geometric model (inliers) are kept for triangulation. Matches that violate the geometry (outliers) are discarded.
 
 <div align="center">
     <br>
     <img src="assets/sift_matching.png", width="700">
 </div>
 <div align="center">
-    <span>Illustration of matching result using SIFT features on one of our experiments.</span>
+    <span>Illustration of matching result using SIFT features after matching and filtering on one of our experiments. It's visible that we end up with only very reasonable matches, even though some keypoints are not that really distinctive for the scene.</span>
     <br><br>
 </div>
-
-### Filtering Matches
-
-
 
 ### Tracking
 
 A critical architectural decision in our pipeline that had positive impact on the final reconstruction was the move from pairwise matches to global tracks (for later multi-view triangulation). Standard pairwise triangulation treats the pair $(I_1, I_2)$ and $(I_2, I_3)$ as separate universes. If a feature exists in all three frames, naive pairwise logic creates two separate 3D points ($X_{12}$ and $X_{23}$) for the same physical object. This results in ghosting or noise in the final point cloud.
 
-We solve this by building a track list, propagating features across consecutive frames until it's not found anymore. This results in a set of tracks, where a single track $\mathcal{T}$ represents one physical 3D point observed across $N$ consecutive frames
+We solve this by building a track list, propagating features across consecutive frames until it's not found anymore. This results in a set of tracks, where a single track $\mathcal{T}$ represents one physical 3D point observed across $N$ consecutive frames:
 
-:$$\mathcal{T}_k = \{ (I_{start}, u, v), (I_{start+1}, u', v'), \dots, (I_{end}, u'', v'') \}$$
+$$\mathcal{T}_k = \{ (I_{start}, u, v), (I_{start+1}, u', v'), \dots, (I_{end}, u'', v'') \}$$
 
 Although this is far from what modern tracking can do (and what we'll try to explore on other pipelines), it's a simple and fast implementation that already gave us promising results.
+
+## Triangulation and 3D Reconstruction
+
+### Bundle Adjustment
