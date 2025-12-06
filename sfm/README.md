@@ -198,7 +198,7 @@ For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a
 
 <div align="center">
     <br>
-    <img src="assets/sift_extractor.png", width="500">
+    <img src="assets/sift_extractor.png", width="400">
 </div>
 <div align="center">
     <span>Illustration of SIFT feature extractor on one of our experiments.</span>
@@ -223,7 +223,7 @@ ORB is designed to be a faster, binary alternative to SIFT.
 
 <div align="center">
     <br>
-    <img src="assets/orb_extractor.png", width="500">
+    <img src="assets/orb_extractor.png", width="400">
 </div>
 <div align="center">
     <span>Illustration of ORB feature extractor on one of our experiments.</span>
@@ -250,7 +250,7 @@ To filter these outliers, we impose a rigid geometric constraint: epipolar geome
 
 <div align="center">
     <br>
-    <img src="assets/epipolar_geometry.png", width="500">
+    <img src="assets/epipolar_geometry.png", width="300">
 </div>
 <div align="center">
     <span>Illustration of the epipolar geometry and epipolar plane.</span>
