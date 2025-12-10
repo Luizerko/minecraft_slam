@@ -176,13 +176,12 @@ For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a
 
     First, a DoG function responds strongly to corners and edges, so why do we remove edges? Edges are bad for tracking because of the aperture problem. Check [this very cool website](https://elvers.us/perception/aperture/) for more details, but basically it states that the local motion information is inherently ambiguous with respect to the global motion for a straight line seen through a small aperture. That is, many different motions could cause the same response visual response for a small receptive field.
 
-    So back to removing edges, SIFT calculates the Hessian Matrix $\mathbf{H}$ at the keypoint location:
+    So back to removing edges, SIFT calculates the Hessian matrix $\mathbf{H}$ at the keypoint location:
     
-    $$\mathbf{H} =
-    \begin{bmatrix}
-    D_{xx} & D_{xy} \\
-    D_{xy} & D_{yy}
-    \end{bmatrix}$$
+$$\mathbf{H} = \begin{bmatrix}
+D_{xx} & D_{xy} \\
+D_{xy} & D_{yy} \\
+\end{bmatrix}$$
     
     We then check the ratio of eigenvalues of $\mathbf{H}$. If the ratio is high (one eigenvalue is much bigger than the other), it indicates an edge and we can discard these keypoints. We only keep points where curvature is high (two big and relatively similar eigenvalues) in both directions, which indicates a corner.
 
@@ -410,7 +409,10 @@ $$v (\mathbf{p}^3 \mathbf{X}_w) - (\mathbf{p}^2 \mathbf{X}_w) = 0 \implies (v \m
 
 For a single camera, this forms a $2 \times 4$ matrix equation:
 
-$$\begin{bmatrix} u \mathbf{p}^3 - \mathbf{p}^1 \\ v \mathbf{p}^3 - \mathbf{p}^2 \end{bmatrix} \mathbf{X}_w = \mathbf{0}$$
+$$\begin{bmatrix} 
+u \mathbf{p}^3 - \mathbf{p}^1 \\ 
+v \mathbf{p}^3 - \mathbf{p}^2 
+\end{bmatrix} \mathbf{X}_w = \mathbf{0}$$
 
 But we have 3 unknowns in $\mathbf{X}_w $ (we don't care about the homogenous coordinate scale), so we need at least two cameras to solve (they will form a $4 \times 4$ matrix equation).
 
@@ -435,7 +437,7 @@ $$\mathbf{A} \mathbf{X}_w = \mathbf{0}$$
 
 Having said that, we seek a non-zero solution for $\mathbf{X}_w$. This is because of noise in measurements (pixel quantization or feature extraction error for example), so the rays will not intersect perfectly. In real life, there is no $\mathbf{X}_w$ that satisfies $\mathbf{A} \mathbf{X}_w = \mathbf{0}$ exactly. Instead, we formulate this as a least squares minimization problem:
 
-$$\min_{\mathbf{X}_w} || \mathbf{A} \mathbf{X}_w ||^2 \quad \text{subject to } ||\mathbf{X}_w|| = 1$$
+$$\min_{\mathbf{X}_w} ||\mathbf{A} \mathbf{X}_w||^2 \qquad \text{subject to } ||\mathbf{X}_w|| = 1$$
 
 We constrain the norm to 1 just to avoid the trivial solution $\mathbf{X}_w = \mathbf{0}$ and to fix the homogeneous scale. The solution is given by Singular Value Decomposition (SVD). Decompose $\mathbf{A}$ into:
 
@@ -456,7 +458,7 @@ z/w
 \end{bmatrix}$$
 
 <div align="center">
-    <br>
+    <br><br>
     <img src="assets/raw_triangulation.png", width="300">
 </div>
 <div align="center">
