@@ -362,4 +362,107 @@ Although this is far from what modern tracking can do (and what we'll try to exp
 
 ## Triangulation and 3D Reconstruction
 
+Once we have a set of matched feature points across $N$ images and the corresponding projection matrices $\mathbf{P}_i$, our goal is to estimate the 3D structure. For a single 3D point $\mathbf{X}_w = [X, Y, Z, 1]^T$ observed in an image as pixel $\mathbf{x} = [u, v, 1]^T$, the projection equation is:
+
+$$\lambda \mathbf{x} = \mathbf{P} \mathbf{X}_w$$
+
+Where $\lambda$ is the unknown projective depth. We have unknowns on both sides of the equation ($\mathbf{X}_w$ and $\lambda$). We cannot simply invert $\mathbf{P}$ because it is a $3 \times 4$ matrix (non-invertible, which makes sense because projection destroys depth). We need a method to solve for $\mathbf{X}_w$ linearly, that's when we employ the Direct Linear Transform (DLT).
+
+### DLT Algorithm
+
+The fundamental insight of DLT is that the vectors on the left side ($\lambda \mathbf{x}$) and the right side ($\mathbf{P} \mathbf{X}_w$) are equal, so they point in the exact same direction. If two vectors are collinear, their cross product is zero.
+
+$$\lambda \mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0} \implies \mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0}$$
+
+We eliminate the scalar $\lambda$ to get to a linear system and to make the system solvable with 2 views (if we kept $\lambda$'s we would need at least 3 views to solve). Now let $\mathbf{P}$ be represented by its row vectors $\mathbf{p}^1, \mathbf{p}^2, \mathbf{p}^3$.
+
+$$\mathbf{P} \mathbf{X}_w = \begin{bmatrix} 
+\mathbf{p}^1 \mathbf{X}_w \\ 
+\mathbf{p}^2 \mathbf{X}_w \\ 
+\mathbf{p}^3 \mathbf{X}_w 
+\end{bmatrix}$$
+
+Writing out the cross product $\mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0}$ component-by-component with $\mathbf{x} = [u, v, 1]^T$ we get:
+
+$$\begin{bmatrix} 
+u \\ 
+v \\ 
+1 
+\end{bmatrix} \times \begin{bmatrix} 
+\mathbf{p}^1 \mathbf{X}_w \\ 
+\mathbf{p}^2 \mathbf{X}_w \\ 
+\mathbf{p}^3 \mathbf{X}_w 
+\end{bmatrix} = \begin{bmatrix}
+v(\mathbf{p}^3 \mathbf{X}_w) - 1(\mathbf{p}^2 \mathbf{X}_w) \\
+1(\mathbf{p}^1 \mathbf{X}_w) - u(\mathbf{p}^3 \mathbf{X}_w) \\
+u(\mathbf{p}^2 \mathbf{X}_w) - v(\mathbf{p}^1 \mathbf{X}_w)
+\end{bmatrix} = \begin{bmatrix} 
+0 \\ 
+0 \\ 
+0 
+\end{bmatrix}$$
+
+This gives us three linear constraints. However, the third equation is linearly dependent on the first two, so we use just the first two rows. Rearranging terms to factor out $\mathbf{X}_w$:
+
+$$u (\mathbf{p}^3 \mathbf{X}_w) - (\mathbf{p}^1 \mathbf{X}_w) = 0 \implies (u \mathbf{p}^3 - \mathbf{p}^1) \mathbf{X}_w = 0$$
+
+$$v (\mathbf{p}^3 \mathbf{X}_w) - (\mathbf{p}^2 \mathbf{X}_w) = 0 \implies (v \mathbf{p}^3 - \mathbf{p}^2) \mathbf{X}_w = 0$$
+
+For a single camera, this forms a $2 \times 4$ matrix equation:
+
+$$\begin{bmatrix} u \mathbf{p}^3 - \mathbf{p}^1 \\ v \mathbf{p}^3 - \mathbf{p}^2 \end{bmatrix} \mathbf{X}_w = \mathbf{0}$$
+
+But we have 3 unknowns in $\mathbf{X}_w $ (we don't care about the homogenous coordinate scale), so we need at least two cameras to solve (they will form a $4 \times 4$ matrix equation).
+
+### Generalizing to Multi-View
+
+Since we track features across $N$ views (where $N \geq 2$), we can stack these constraints into a single over-determined system. For $N$ cameras, we construct a matrix $\mathbf{A}$ of size $2N \times 4$. For a track observed in views $i = 1 \dots N$ at pixels $(u_i, v_i)$:
+
+$$\mathbf{A} = 
+\begin{bmatrix}
+u_1 \mathbf{p}_1^3 - \mathbf{p}_1^1 \\
+v_1 \mathbf{p}_1^3 - \mathbf{p}_1^2 \\
+u_2 \mathbf{p}_2^3 - \mathbf{p}_2^1 \\
+v_2 \mathbf{p}_2^3 - \mathbf{p}_2^2 \\
+\vdots \\
+u_N \mathbf{p}_N^3 - \mathbf{p}_N^1 \\
+v_N \mathbf{p}_N^3 - \mathbf{p}_N^2
+\end{bmatrix}$$
+
+We must now solve the homogeneous linear system:
+
+$$\mathbf{A} \mathbf{X}_w = \mathbf{0}$$
+
+Having said that, we seek a non-zero solution for $\mathbf{X}_w$. This is because of noise in measurements (pixel quantization or feature extraction error for example), so the rays will not intersect perfectly. In real life, there is no $\mathbf{X}_w$ that satisfies $\mathbf{A} \mathbf{X}_w = \mathbf{0}$ exactly. Instead, we formulate this as a least squares minimization problem:
+
+$$\min_{\mathbf{X}_w} || \mathbf{A} \mathbf{X}_w ||^2 \quad \text{subject to } ||\mathbf{X}_w|| = 1$$
+
+We constrain the norm to 1 just to avoid the trivial solution $\mathbf{X}_w = \mathbf{0}$ and to fix the homogeneous scale. The solution is given by Singular Value Decomposition (SVD). Decompose $\mathbf{A}$ into:
+
+$$\mathbf{A} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T$$
+
+- $\mathbf{U}$: Orthogonal matrix spanning the column space.
+
+- $\mathbf{\Sigma}$: Diagonal matrix of singular values (scalars $\sigma_1 \geq \sigma_2 \geq \sigma_3 \geq \sigma_4 \geq 0$).
+
+- $\mathbf{V}$: Orthogonal matrix spanning the row space.
+
+The vector $\mathbf{X}_w$ that minimizes $||\mathbf{A} \mathbf{X}_w||$ corresponds to the column of $\mathbf{V}$ associated with the smallest singular value. Since SVD sorts singular values largest-to-smallest, this is the last column of $\mathbf{V}$ (or the last row of $\mathbf{V}^T$). The SVD returns a homogeneous vector $\mathbf{X}_{svd} = [x, y, z, w]^T$. Now to convert this back to Euclidean space for our estimated 3D position of the feature in the Minecraft world frame, we do:
+
+$$\mathbf{X}_{final} = \begin{bmatrix} 
+x/w \\ 
+y/w \\ 
+z/w 
+\end{bmatrix}$$
+
+<div align="center">
+    <br>
+    <img src="assets/raw_triangulation.png", width="300">
+</div>
+<div align="center">
+    <span>Illustration of a point-cloud using SIFT features for matching and triangulation on 2/3-length tracks on one of our experiments (the small corridor with a left turn). The point-cloud is reasonable in terms of the overall distribution of points, capturing the straight corridor with a left turn structure and keeping points (like for torches) on more-or-less the correct position relative to the corridor. Having said that, it's clear that the reconstruction is far from perfect, with a bunch of points placed outside the actual corridor, floor and ground mixing up and a lot of noise on point position in general.</span>
+    <br><br>
+</div>
+
 ### Bundle Adjustment
+
