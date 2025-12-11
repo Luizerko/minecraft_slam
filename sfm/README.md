@@ -19,17 +19,17 @@ Because our data originates from a game engine (Minecraft) and is processed in a
 ### Dataset and Input Space 
 Our dataset provides the classic rigid body 6-DoF pose of the agent (camera) for every frame $i$, though our specific input data is constrained to 5-DoF  because roll is always 0:
 
-- Position of the camera in world coordinates: $\boldsymbol{C}_w = [X, Y, Z]^T$.
+- Position of the camera in world coordinates: $\mathbf{C}_w = [X, Y, Z]^T$.
 
 - Orientation fo the camera in world frame: Euler angles $\theta_{yaw}$ and $\phi_{pitch}$ in degrees (there's no roll in Minecraft).
 
 And from the game information, we know that the Minecraft world frame ($\mathcal{F}_W$) is: 
 
-- $+\boldsymbol{X}_W$: East.
+- $+\mathbf{X}_W$: East.
 
-- $+\boldsymbol{Y}_W$: Up.
+- $+\mathbf{Y}_W$: Up.
 
-- $+\boldsymbol{Z}_W$: South.
+- $+\mathbf{Z}_W$: South.
 
 - Yaw: $0^\circ \rightarrow +Z_W$ and $-90^\circ \rightarrow +X_W$.
 
@@ -37,11 +37,11 @@ And from the game information, we know that the Minecraft world frame ($\mathcal
 
 We should also consider the camera frame ($\mathcal{F}_C$):
 
-- $+\boldsymbol{X}_C$: Pointing right.
+- $+\mathbf{X}_C$: Pointing right.
 
-- $+\boldsymbol{Y}_C$: Pointing down.
+- $+\mathbf{Y}_C$: Pointing down.
 
-- $+\boldsymbol{Z}_C$: Pointing forward (the optical axis).
+- $+\mathbf{Z}_C$: Pointing forward (the optical axis).
 
 <div align="center">
     <br>
@@ -54,24 +54,24 @@ We should also consider the camera frame ($\mathcal{F}_C$):
 
 ### Target Space: Pinhole Camera Model
 
-We utilize the standard Pinhole Camera Model. This requires us to construct a projection matrix $\boldsymbol{P}$ that maps a 3D point in the world $\boldsymbol{X}_w$ to a 2D pixel coordinate $\boldsymbol{x}$. Mathematically:
+We utilize the standard Pinhole Camera Model. This requires us to construct a projection matrix $\mathbf{P}$ that maps a 3D point in the world $\mathbf{X}_w$ to a 2D pixel coordinate $\mathbf{x}$. Mathematically:
 
-$$\boldsymbol{x} \approx \boldsymbol{P} \boldsymbol{X}_w$$
-$$\boldsymbol{P} = \boldsymbol{K} [\boldsymbol{R} | \boldsymbol{t}]$$
+$$\mathbf{x} \approx \mathbf{P} \mathbf{X}_w$$
+$$\mathbf{P} = \mathbf{K} [\mathbf{R} | \mathbf{t}]$$
 
 Where:
 
-- $\boldsymbol{K}$ is the intrinsics matrix (internal camera properties).
+- $\mathbf{K}$ is the intrinsics matrix (internal camera properties).
 
-- $\boldsymbol{R}$ is the rotation matrix (mapping world axes to camera axes).
+- $\mathbf{R}$ is the rotation matrix (mapping world axes to camera axes).
 
-- $\boldsymbol{t}$ is the translation vector (position of the world origin relative to the camera).
+- $\mathbf{t}$ is the translation vector (position of the world origin relative to the camera).
 
 #### Intrinsics K
 
 Now we have to construct all of these mathematical objects, starting with the intrinsics. It projects 3D camera coordinates onto the 2D image plane and, assuming we have no skew, it's given by:
 
-$$\boldsymbol{K} =
+$$\mathbf{K} =
 \begin{bmatrix} 
     f_x & 0 & c_x \\
     0 & f_y & c_y \\
@@ -99,7 +99,7 @@ $$c_x = \frac{W}{2}, \quad c_y = \frac{H}{2}$$
 
 So we now know how to compute intrinsics perfectly, we can start constructing extrinsics. We cannot simply convert Minecraft Euler angles to a rotation matrix directly because of the zero mismatch. Standard Euler matrices assumes that, at angle 0, the object is perfectly aligned with the world, which is not the case of our camera (check the world and camera frames image again).
 
-Instead, we construct the rotation matrix $\boldsymbol{R}$ column-by-column (or row-by-row) by calculating the Basis Vectors of the camera frame expressed in world coordinates. For that, we'll make use of spherical coordinates using Minecraft definitions of yaw and pitchThe forward vector ($\boldsymbol{f}$) corresponds to the camera's Z-axis ($+\boldsymbol{Z}_C$):
+Instead, we construct the rotation matrix $\mathbf{R}$ column-by-column (or row-by-row) by calculating the Basis Vectors of the camera frame expressed in world coordinates. For that, we'll make use of spherical coordinates using Minecraft definitions of yaw and pitchThe forward vector ($\mathbf{f}$) corresponds to the camera's Z-axis ($+\mathbf{Z}_C$):
 
 $$f_x = - \cos(\phi_{pitch}) \sin(\theta_{yaw})$$
 
@@ -109,7 +109,7 @@ $$f_z = \cos(\phi_{pitch}) \cos(\theta_{yaw})$$
 
 Note that the signs had to be adjusted for sines in $X$ and $Y$ coordinates because of yaw and pitch rotation conventions from Minecraft. This will eventually be the case for the next vector too.
 
-The right vector ($\boldsymbol{r}$) corresponds to the camera's X-axis ($+\boldsymbol{X}_C$):
+The right vector ($\mathbf{r}$) corresponds to the camera's X-axis ($+\mathbf{X}_C$):
 
 $$r_x = -\cos(\theta_{yaw})$$
 
@@ -117,11 +117,11 @@ $$r_y = 0$$
 
 $$r_z = -\sin(\theta_{yaw})$$
 
-- The down vector ($\boldsymbol{d}$) corresponds to the Camera's Y-axis ($+\boldsymbol{Y}_C$). Since our basis vectors must be orthogonal, the down vector is simply the cross product of the previous vectors. Choosing the order depends on where we want it to point at and, in our case, the answer is down ($-\boldsymbol{Y}_W$), so we use forward then right:
+- The down vector ($\mathbf{d}$) corresponds to the Camera's Y-axis ($+\mathbf{Y}_C$). Since our basis vectors must be orthogonal, the down vector is simply the cross product of the previous vectors. Choosing the order depends on where we want it to point at and, in our case, the answer is down ($-\mathbf{Y}_W$), so we use forward then right:
 
-$$\boldsymbol{d} = \boldsymbol{f} \times \boldsymbol{r}$$
+$$\mathbf{d} = \mathbf{f} \times \mathbf{r}$$
 
-This comes from [OpenCV](https://opencv.org/), where $\boldsymbol{X} \times \boldsymbol{Z} = -\boldsymbol{Y}$ (with $+\boldsymbol{Y}$ pointing down by convention), so we do the opposite order.
+This comes from [OpenCV](https://opencv.org/), where $\mathbf{X} \times \mathbf{Z} = -\mathbf{Y}$ (with $+\mathbf{Y}$ pointing down by convention), so we do the opposite order.
 
 <div align="center">
     <br>
@@ -141,22 +141,22 @@ This comes from [OpenCV](https://opencv.org/), where $\boldsymbol{X} \times \bol
     <br><br>
 </div>
 
-Now we can get back to the rotation matrix, which rotates a vector from world frame to camera frame. Rows are simply these normalized and transposed (because the matrix will be left multiplying) basis vectors. Since we want the typical $(X, Y, Z)$ coordinates, we'll stack the matrix with $\boldsymbol{r}$ then $\boldsymbol{d}$ then $\boldsymbol{f}$:
+Now we can get back to the rotation matrix, which rotates a vector from world frame to camera frame. Rows are simply these normalized and transposed (because the matrix will be left multiplying) basis vectors. Since we want the typical $(X, Y, Z)$ coordinates, we'll stack the matrix with $\mathbf{r}$ then $\mathbf{d}$ then $\mathbf{f}$:
 
-$$\boldsymbol{R} =
+$$\mathbf{R} =
 \begin{bmatrix}
-\rule[2pt]{10pt}{0.5pt} & \boldsymbol{r}^T & \rule[2pt]{10pt}{0.5pt} \\
-\rule[2pt]{10pt}{0.5pt} & \boldsymbol{d}^T & \rule[2pt]{10pt}{0.5pt} \\
-\rule[2pt]{10pt}{0.5pt} & \boldsymbol{f}^T & \rule[2pt]{10pt}{0.5pt} 
+\rule[2pt]{10pt}{0.5pt} & \mathbf{r}^T & \rule[2pt]{10pt}{0.5pt} \\
+\rule[2pt]{10pt}{0.5pt} & \mathbf{d}^T & \rule[2pt]{10pt}{0.5pt} \\
+\rule[2pt]{10pt}{0.5pt} & \mathbf{f}^T & \rule[2pt]{10pt}{0.5pt} 
 \end{bmatrix}$$
 
 #### Translation Vector t
 
-And finally getting to the translation vector $\boldsymbol{t}$, it represents the position of the world origin as seen from the camera frame. Intuitively it's what makes the camera the origin of its own frame. To compute it, we do:
+And finally getting to the translation vector $\mathbf{t}$, it represents the position of the world origin as seen from the camera frame. Intuitively it's what makes the camera the origin of its own frame. To compute it, we do:
  
-$$\boldsymbol{R} \cdot \boldsymbol{C}_w + \boldsymbol{t} = \boldsymbol{0} \implies$$
+$$\mathbf{R} \cdot \mathbf{C}_w + \mathbf{t} = \mathbf{0} \implies$$
 
-$$\implies \boldsymbol{t} = -\boldsymbol{R} \cdot \boldsymbol{C}_w$$
+$$\implies \mathbf{t} = -\mathbf{R} \cdot \mathbf{C}_w$$
 
 ## Feature Extraction and Matching
 
@@ -168,7 +168,7 @@ We implemented our code with two possible (open-source) feature extractors so we
 
 To reconstruct the 3D structure, we first need to identify "interesting" points in our 2D images that are invariant to scale, rotation, and illumination changes. We utilize the SIFT.
 
-For an image $I$, SIFT identifies keypoints $\boldsymbol{x} = (u, v)$ and computes a descriptor vector $\boldsymbol{d} \in \mathbb{R}^{128}$ for each. These are the multiple steps to get there:
+For an image $I$, SIFT identifies keypoints $\mathbf{x} = (u, v)$ and computes a descriptor vector $\mathbf{d} \in \mathbb{R}^{128}$ for each. These are the multiple steps to get there:
 
 - Scale-Space Construction: The image is convolved with Gaussian filters at different scales to get different zoom perceptions of the image. Then Differences of Gaussians (DoG) are computed to find potential keypoints that are stable across different zoom levels.
 
@@ -176,9 +176,9 @@ For an image $I$, SIFT identifies keypoints $\boldsymbol{x} = (u, v)$ and comput
 
     First, a DoG function responds strongly to corners and edges, so why do we remove edges? Edges are bad for tracking because of the aperture problem. Check [this very cool website](https://elvers.us/perception/aperture/) for more details, but basically it states that the local motion information is inherently ambiguous with respect to the global motion for a straight line seen through a small aperture. That is, many different motions could cause the same response visual response for a small receptive field.
 
-    So back to removing edges, SIFT calculates the Hessian matrix $\boldsymbol{H}$ at the keypoint location. We then check the ratio of eigenvalues of $\boldsymbol{H}$. If the ratio is high (one eigenvalue is much bigger than the other), it indicates an edge and we can discard these keypoints. We only keep points where curvature is high (two big and relatively similar eigenvalues) in both directions, which indicates a corner.
+    So back to removing edges, SIFT calculates the Hessian matrix $\mathbf{H}$ at the keypoint location. We then check the ratio of eigenvalues of $\mathbf{H}$. If the ratio is high (one eigenvalue is much bigger than the other), it indicates an edge and we can discard these keypoints. We only keep points where curvature is high (two big and relatively similar eigenvalues) in both directions, which indicates a corner.
     
-$$\boldsymbol{H} = \begin{bmatrix}
+$$\mathbf{H} = \begin{bmatrix}
 D_{xx} & D_{xy} \\
 D_{xy} & D_{yy} \\
 \end{bmatrix}$$
@@ -189,7 +189,7 @@ D_{xy} & D_{yy} \\
     
     Sometimes a corner is ambiguous, so if the histogram has a secondary (ore more) peak that is within 80% of the main peak's height, SIFT creates two separate keypoints at the exact same location $(x,y)$, but with different orientations. This allows the algorithm to try matching both versions. To visualize this scenario, think of a dot on a black background. The gradients would point outward in all directions and we would probably get a very flat histogram.
 
-- Keypoint Descriptor: A $16 \times 16$ neighborhood around the keypoint is taken. It is divided into $16$ sub-blocks of $4 \times 4$ size. For each sub-block, an 8-bin orientation histogram is created, which leads to a $4 \times 4 \times 8 = 128$ element feature vector.This vector $\boldsymbol{d}$ is the "fingerprint" of that visual feature.
+- Keypoint Descriptor: A $16 \times 16$ neighborhood around the keypoint is taken. It is divided into $16$ sub-blocks of $4 \times 4$ size. For each sub-block, an 8-bin orientation histogram is created, which leads to a $4 \times 4 \times 8 = 128$ element feature vector.This vector $\mathbf{d}$ is the "fingerprint" of that visual feature.
 
     Notice that there's a difference between the general orientation and the descriptor. The keypoint orientation is the reference frame whereas the descriptor bins are the data. Suppose you didn't do the former. If you took a photo a same intersection for which you already computed SIFT features while hanging upside down, the descriptor would change (also be upside down), and we wouldn't match keypoints that were supposed to be matches.
 
@@ -202,9 +202,9 @@ D_{xy} & D_{yy} \\
     <br><br>
 </div>
 
-Given two images $I_a$ and $I_b$, we seek to find corresponding keypoints. We use a K-Nearest Neighbors (k-NN) approach with the Euclidean distance metric ($L_2$ norm). For a descriptor $\boldsymbol{d}_{a}$ in image A, we find the two closest descriptors $\boldsymbol{d}_{b1}, \boldsymbol{d}_{b2}$ in image B. Then we use Lowe's Ratio Test to reject ambiguous matches: only accept a match if the closest neighbor is significantly closer than the second closest. The concept of significantly closer depends on a chosen trehshold $\alpha$, but the general forumaltion is given by:
+Given two images $I_a$ and $I_b$, we seek to find corresponding keypoints. We use a K-Nearest Neighbors (k-NN) approach with the Euclidean distance metric ($L_2$ norm). For a descriptor $\mathbf{d}_{a}$ in image A, we find the two closest descriptors $\mathbf{d}_{b1}, \mathbf{d}_{b2}$ in image B. Then we use Lowe's Ratio Test to reject ambiguous matches: only accept a match if the closest neighbor is significantly closer than the second closest. The concept of significantly closer depends on a chosen trehshold $\alpha$, but the general forumaltion is given by:
 
-$$||\boldsymbol{d}_a - \boldsymbol{d}_{b1}|| < \alpha ||\boldsymbol{d}_a - \boldsymbol{d}_{b2}||$$
+$$||\mathbf{d}_a - \mathbf{d}_{b1}|| < \alpha ||\mathbf{d}_a - \mathbf{d}_{b2}||$$
 
 ### Oriented FAST and Rotated BRIEF (ORB)
 
@@ -243,7 +243,7 @@ Because of that, we had to chose an atypically small $\alpha = 0.55$ to guarante
 
 The matches produced by the k-NN algorithm are hypothetical. While they look similar in appearance, they may be geometrically impossible (like a pixel on the floor matched to a pixel on the ceiling).
 
-To filter these outliers, we impose a rigid geometric constraint: epipolar geometry. Consider a single 3D point $\boldsymbol{X}_1$ observed by two cameras with centers $\boldsymbol{C}_1$ and $\boldsymbol{C}_2$ (for simplicity, we treat camera 1 as the center of the universe, so the 3D point $\boldsymbol{X}_1$ is $\boldsymbol{X}_w$). These three points form a triangle in 3D space. This triangle lies on a specific 2D plane called the epipolar plane. This coplanarity allows us to derive a strict algebraic relationship between the projection of the point in image 1 and image 2.
+To filter these outliers, we impose a rigid geometric constraint: epipolar geometry. Consider a single 3D point $\mathbf{X}_1$ observed by two cameras with centers $\mathbf{C}_1$ and $\mathbf{C}_2$ (for simplicity, we treat camera 1 as the center of the universe, so the 3D point $\mathbf{X}_1$ is $\mathbf{X}_w$). These three points form a triangle in 3D space. This triangle lies on a specific 2D plane called the epipolar plane. This coplanarity allows us to derive a strict algebraic relationship between the projection of the point in image 1 and image 2.
 
 <div align="center">
     <br>
@@ -254,13 +254,13 @@ To filter these outliers, we impose a rigid geometric constraint: epipolar geome
     <br><br>
 </div>
 
-Now let $\boldsymbol{x}_1$ and $\boldsymbol{x}_2$ be the coordinates of the feature points in **normalized** camera coordinates. We obtain these by removing the camera intrinsics from pixel coordinates:
+Now let $\mathbf{x}_1$ and $\mathbf{x}_2$ be the coordinates of the feature points in **normalized** camera coordinates. We obtain these by removing the camera intrinsics from pixel coordinates:
 
-$$\boldsymbol{x}_{norm} = \boldsymbol{K}^{-1} \boldsymbol{x}_{pixel}$$
+$$\mathbf{x}_{norm} = \mathbf{K}^{-1} \mathbf{x}_{pixel}$$
 
-It's very important to notice here that $\boldsymbol{x}_{norm}$ is not exactly a point in space. When doing the forward math from $\boldsymbol{X}_c = [X, Y, Z]^T$ to $\boldsymbol{u} = [u, v, 1]^T$, we have:
+It's very important to notice here that $\mathbf{x}_{norm}$ is not exactly a point in space. When doing the forward math from $\mathbf{X}_c = [X, Y, Z]^T$ to $\mathbf{u} = [u, v, 1]^T$, we have:
 
-$$\boldsymbol{K} \begin{bmatrix} 
+$$\mathbf{K} \begin{bmatrix} 
 X \\ 
 Y \\ 
 Z
@@ -276,7 +276,7 @@ v \\
 
 With $\lambda = Z$ encoding the depth information because we have to divide the first two coordinates by it to get to the pixel coordinate. But when doing the back computation, starting from a pixel, we don't have $\lambda$, so we end up with the ratio of the $X$ and $Y$ coordinates with respect to $Z$, but not an actual point in 3D space:
 
-$$\boldsymbol{K}^{-1} \begin{bmatrix}
+$$\mathbf{K}^{-1} \begin{bmatrix}
 u \\
 v \\ 
 1 
@@ -290,53 +290,53 @@ Y / Z \\
 1 
 \end{bmatrix}$$
 
-So mathematically, $\boldsymbol{K}^{-1} \boldsymbol{x}_{pixel}$ gives us the coordinates of the point if the depth was exactly $Z=1$. Since the depth could be anything, this vector represents an infinite line passing through $(0,0,0)$ and $(X/Z, Y/Z, 1)$, which is a ray.
+So mathematically, $\mathbf{K}^{-1} \mathbf{x}_{pixel}$ gives us the coordinates of the point if the depth was exactly $Z=1$. Since the depth could be anything, this vector represents an infinite line passing through $(0,0,0)$ and $(X/Z, Y/Z, 1)$, which is a ray.
 
-The relationship between the two camera views is defined by a rotation $\boldsymbol{R}$ and translation $\boldsymbol{t}$, so a point in the second frame is related to the first frame by rigid body motion:
+The relationship between the two camera views is defined by a rotation $\mathbf{R}$ and translation $\mathbf{t}$, so a point in the second frame is related to the first frame by rigid body motion:
 
-$$\boldsymbol{x}_2 = \boldsymbol{R} \boldsymbol{x}_1 + \boldsymbol{t}$$
+$$\mathbf{x}_2 = \mathbf{R} \mathbf{x}_1 + \mathbf{t}$$
 
 Note that this holds up to a scale factor since we don't know depth yet, but the vectors point in the same direction. Mathematically, the relationship that involves the true 3D depths is:
 
-$$\lambda_2 \boldsymbol{x}_2 = \boldsymbol{R} (\lambda_1 \boldsymbol{x}_1) + \boldsymbol{t}$$
+$$\lambda_2 \mathbf{x}_2 = \mathbf{R} (\lambda_1 \mathbf{x}_1) + \mathbf{t}$$
 
 And now hold on to your chairs because we are going to do some algebraic massage to this equation until we can eliminate the depth variables we don't know:
 
-$$\lambda_2 \boldsymbol{x}_2 = \lambda_1 \boldsymbol{R} \boldsymbol{x}_1 + \boldsymbol{t} \underset{\text{Cross product with } \boldsymbol{t}} \implies$$
+$$\lambda_2 \mathbf{x}_2 = \lambda_1 \mathbf{R} \mathbf{x}_1 + \mathbf{t} \underset{\text{Cross product with } \mathbf{t}} \implies$$
 
-$$\implies \boldsymbol{t} \times (\lambda_2 \boldsymbol{x}_2) = \boldsymbol{t} \times (\lambda_1 \boldsymbol{R} \boldsymbol{x}_1 + \boldsymbol{t}) \implies$$
+$$\implies \mathbf{t} \times (\lambda_2 \mathbf{x}_2) = \mathbf{t} \times (\lambda_1 \mathbf{R} \mathbf{x}_1 + \mathbf{t}) \implies$$
 
-$$\implies \lambda_2 (\boldsymbol{t} \times \boldsymbol{x}_2) = \lambda_1 (\boldsymbol{t} \times \boldsymbol{R} \boldsymbol{x}_1) \underset{\text{Dot product with } \boldsymbol{x}_2} \implies$$
+$$\implies \lambda_2 (\mathbf{t} \times \mathbf{x}_2) = \lambda_1 (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) \underset{\text{Dot product with } \mathbf{x}_2} \implies$$
 
-$$\implies \boldsymbol{x}_2 \cdot [ \lambda_2 (\boldsymbol{t} \times \boldsymbol{x}_2) ] = \boldsymbol{x}_2 \cdot [ \lambda_1 (\boldsymbol{t} \times \boldsymbol{R} \boldsymbol{x}_1) ] \implies$$
+$$\implies \mathbf{x}_2 \cdot [ \lambda_2 (\mathbf{t} \times \mathbf{x}_2) ] = \mathbf{x}_2 \cdot [ \lambda_1 (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) ] \implies$$
 
-$$\implies 0 = \lambda_1 [ \boldsymbol{x}_2 \cdot (\boldsymbol{t} \times \boldsymbol{R} \boldsymbol{x}_1) ] \underset{\lambda_1 \text{ cannot be 0 (inside the camera)}} \implies$$
+$$\implies 0 = \lambda_1 [ \mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) ] \underset{\lambda_1 \text{ cannot be 0 (inside the camera)}} \implies$$
 
-$$\implies \boldsymbol{x}_2 \cdot (\boldsymbol{t} \times \boldsymbol{R} \boldsymbol{x}_1) = 0$$
+$$\implies \mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) = 0$$
 
 This last equation we just got to is a rewriting of the famous essential matrix equation. We'll use a cross-product simulating matrix and the associative property of matrix multiplication to get:
 
-$$\boldsymbol{x}_2 \cdot (\boldsymbol{t} \times \boldsymbol{R} \boldsymbol{x}_1) = \boldsymbol{x}_2 \cdot ([\boldsymbol{t}]_\times (\boldsymbol{R} \boldsymbol{x}_1)) =$$
+$$\mathbf{x}_2 \cdot (\mathbf{t} \times \mathbf{R} \mathbf{x}_1) = \mathbf{x}_2 \cdot ([\mathbf{t}]_\times (\mathbf{R} \mathbf{x}_1)) =$$
 
-$$= \boldsymbol{x}_2 \cdot (([\boldsymbol{t}]_\times \boldsymbol{R}) \boldsymbol{x}_1) = \boldsymbol{x}_2^T ([\boldsymbol{t}]_\times \boldsymbol{R}) \boldsymbol{x}_1 =$$
+$$= \mathbf{x}_2 \cdot (([\mathbf{t}]_\times \mathbf{R}) \mathbf{x}_1) = \mathbf{x}_2^T ([\mathbf{t}]_\times \mathbf{R}) \mathbf{x}_1 =$$
 
-$$= \boldsymbol{x}_2^T \boldsymbol{E} \boldsymbol{x}_1 = 0$$
+$$= \mathbf{x}_2^T \mathbf{E} \mathbf{x}_1 = 0$$
 
 Where
 
-$$[\boldsymbol{t}]_\times = \begin{bmatrix} 
+$$[\mathbf{t}]_\times = \begin{bmatrix} 
 0 & -t_3 & t_2 \\
 t_3 & 0 & -t_1 \\
 -t_2 & t_1 & 0
 \end{bmatrix}$$
 
-Finally getting to the part where we filter points, we start by solving for $\boldsymbol{E}$. We could do it using all our matches via least squares, but a single outlier would ruin the result. Instead, we use Random Sample Consensus (RANSAC):
+Finally getting to the part where we filter points, we start by solving for $\mathbf{E}$. We could do it using all our matches via least squares, but a single outlier would ruin the result. Instead, we use Random Sample Consensus (RANSAC):
 
-- Randomly select the minimum number of points required to solve for $\boldsymbol{E}$. Since $\boldsymbol{E}$ has 5 degrees of freedom (3 rotation, 2 translation), we select 5 random matches. Just to ratify why we only have 2 degrees of freedom for translation, remember that scale is unknown. This basically means that if we move the camera 2 center along the ray it shoots on $\boldsymbol{X}_1$, it won't change $\boldsymbol{x}_2$, which puts a constraint on the translation vector, reducing one degree of freedom from it.
+- Randomly select the minimum number of points required to solve for $\mathbf{E}$. Since $\mathbf{E}$ has 5 degrees of freedom (3 rotation, 2 translation), we select 5 random matches. Just to ratify why we only have 2 degrees of freedom for translation, remember that scale is unknown. This basically means that if we move the camera 2 center along the ray it shoots on $\mathbf{X}_1$, it won't change $\mathbf{x}_2$, which puts a constraint on the translation vector, reducing one degree of freedom from it.
 
-- Compute a candidate essential matrix $\boldsymbol{E}_{cand}$ using the [Nister 5-point algorithm](https://www-users.cse.umn.edu/~hspark/CSci5980/nister.pdf). Test all other matches against this candidate. For each match $(\boldsymbol{x}_1, \boldsymbol{x}_2)$, we calculate the error: how far is point $\boldsymbol{x}_2$ from the epipolar line defined by $\boldsymbol{E}_{cand} \boldsymbol{x}_1$? If distance is less than a threshold (normally 1 or less), count it as an inlier.
+- Compute a candidate essential matrix $\mathbf{E}_{cand}$ using the [Nister 5-point algorithm](https://www-users.cse.umn.edu/~hspark/CSci5980/nister.pdf). Test all other matches against this candidate. For each match $(\mathbf{x}_1, \mathbf{x}_2)$, we calculate the error: how far is point $\mathbf{x}_2$ from the epipolar line defined by $\mathbf{E}_{cand} \mathbf{x}_1$? If distance is less than a threshold (normally 1 or less), count it as an inlier.
 
-- Repeat the previous steps $N$ iterations and keep the $\boldsymbol{E}$ that produced the highest number of inliers. Then re-calculate the final $\boldsymbol{E}$ using only those inliers for maximum precision. The result is a boolean mask. Matches that fit the geometric model (inliers) are kept for triangulation. Matches that violate the geometry (outliers) are discarded.
+- Repeat the previous steps $N$ iterations and keep the $\mathbf{E}$ that produced the highest number of inliers. Then re-calculate the final $\mathbf{E}$ using only those inliers for maximum precision. The result is a boolean mask. Matches that fit the geometric model (inliers) are kept for triangulation. Matches that violate the geometry (outliers) are discarded.
 
 <div align="center">
     <br>
@@ -359,97 +359,97 @@ Although this is far from what modern tracking can do (and what we'll try to exp
 
 ## Triangulation and 3D Reconstruction
 
-Once we have a set of matched feature points across $N$ images and the corresponding projection matrices $\boldsymbol{P}_i$, our goal is to estimate the 3D structure. For a single 3D point $\boldsymbol{X}_w = [X, Y, Z, 1]^T$ observed in an image as pixel $\boldsymbol{x} = [u, v, 1]^T$, the projection equation is:
+Once we have a set of matched feature points across $N$ images and the corresponding projection matrices $\mathbf{P}_i$, our goal is to estimate the 3D structure. For a single 3D point $\mathbf{X}_w = [X, Y, Z, 1]^T$ observed in an image as pixel $\mathbf{x} = [u, v, 1]^T$, the projection equation is:
 
-$$\lambda \boldsymbol{x} = \boldsymbol{P} \boldsymbol{X}_w$$
+$$\lambda \mathbf{x} = \mathbf{P} \mathbf{X}_w$$
 
-Where $\lambda$ is the unknown projective depth. We have unknowns on both sides of the equation ($\boldsymbol{X}_w$ and $\lambda$). We cannot simply invert $\boldsymbol{P}$ because it is a $3 \times 4$ matrix (non-invertible, which makes sense because projection destroys depth). We need a method to solve for $\boldsymbol{X}_w$ linearly, that's when we employ the Direct Linear Transform (DLT).
+Where $\lambda$ is the unknown projective depth. We have unknowns on both sides of the equation ($\mathbf{X}_w$ and $\lambda$). We cannot simply invert $\mathbf{P}$ because it is a $3 \times 4$ matrix (non-invertible, which makes sense because projection destroys depth). We need a method to solve for $\mathbf{X}_w$ linearly, that's when we employ the Direct Linear Transform (DLT).
 
 ### DLT Algorithm
 
-The fundamental insight of DLT is that the vectors on the left side ($\lambda \boldsymbol{x}$) and the right side ($\boldsymbol{P} \boldsymbol{X}_w$) are equal, so they point in the exact same direction. If two vectors are collinear, their cross product is zero.
+The fundamental insight of DLT is that the vectors on the left side ($\lambda \mathbf{x}$) and the right side ($\mathbf{P} \mathbf{X}_w$) are equal, so they point in the exact same direction. If two vectors are collinear, their cross product is zero.
 
-$$\lambda \boldsymbol{x} \times (\boldsymbol{P} \boldsymbol{X}_w) = \boldsymbol{0} \implies \boldsymbol{x} \times (\boldsymbol{P} \boldsymbol{X}_w) = \boldsymbol{0}$$
+$$\lambda \mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0} \implies \mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0}$$
 
-We eliminate the scalar $\lambda$ to get to a linear system and to make the system solvable with 2 views (if we kept $\lambda$'s we would need at least 3 views to solve). Now let $\boldsymbol{P}$ be represented by its row vectors $\boldsymbol{p}^1, \boldsymbol{p}^2, \boldsymbol{p}^3$.
+We eliminate the scalar $\lambda$ to get to a linear system and to make the system solvable with 2 views (if we kept $\lambda$'s we would need at least 3 views to solve). Now let $\mathbf{P}$ be represented by its row vectors $\mathbf{p}^1, \mathbf{p}^2, \mathbf{p}^3$.
 
-$$\boldsymbol{P} \boldsymbol{X}_w = \begin{bmatrix} 
-\boldsymbol{p}^1 \boldsymbol{X}_w \\ 
-\boldsymbol{p}^2 \boldsymbol{X}_w \\ 
-\boldsymbol{p}^3 \boldsymbol{X}_w 
+$$\mathbf{P} \mathbf{X}_w = \begin{bmatrix} 
+\mathbf{p}^1 \mathbf{X}_w \\ 
+\mathbf{p}^2 \mathbf{X}_w \\ 
+\mathbf{p}^3 \mathbf{X}_w 
 \end{bmatrix}$$
 
-Writing out the cross product $\boldsymbol{x} \times (\boldsymbol{P} \boldsymbol{X}_w) = \boldsymbol{0}$ component-by-component with $\boldsymbol{x} = [u, v, 1]^T$ we get:
+Writing out the cross product $\mathbf{x} \times (\mathbf{P} \mathbf{X}_w) = \mathbf{0}$ component-by-component with $\mathbf{x} = [u, v, 1]^T$ we get:
 
 $$\begin{bmatrix} 
 u \\ 
 v \\ 
 1 
 \end{bmatrix} \times \begin{bmatrix} 
-\boldsymbol{p}^1 \boldsymbol{X}_w \\ 
-\boldsymbol{p}^2 \boldsymbol{X}_w \\ 
-\boldsymbol{p}^3 \boldsymbol{X}_w 
+\mathbf{p}^1 \mathbf{X}_w \\ 
+\mathbf{p}^2 \mathbf{X}_w \\ 
+\mathbf{p}^3 \mathbf{X}_w 
 \end{bmatrix} = \begin{bmatrix}
-v(\boldsymbol{p}^3 \boldsymbol{X}_w) - 1(\boldsymbol{p}^2 \boldsymbol{X}_w) \\
-1(\boldsymbol{p}^1 \boldsymbol{X}_w) - u(\boldsymbol{p}^3 \boldsymbol{X}_w) \\
-u(\boldsymbol{p}^2 \boldsymbol{X}_w) - v(\boldsymbol{p}^1 \boldsymbol{X}_w)
+v(\mathbf{p}^3 \mathbf{X}_w) - 1(\mathbf{p}^2 \mathbf{X}_w) \\
+1(\mathbf{p}^1 \mathbf{X}_w) - u(\mathbf{p}^3 \mathbf{X}_w) \\
+u(\mathbf{p}^2 \mathbf{X}_w) - v(\mathbf{p}^1 \mathbf{X}_w)
 \end{bmatrix} = \begin{bmatrix} 
 0 \\ 
 0 \\ 
 0 
 \end{bmatrix}$$
 
-This gives us three linear constraints. However, the third equation is linearly dependent on the first two, so we use just the first two rows. Rearranging terms to factor out $\boldsymbol{X}_w$:
+This gives us three linear constraints. However, the third equation is linearly dependent on the first two, so we use just the first two rows. Rearranging terms to factor out $\mathbf{X}_w$:
 
-$$u (\boldsymbol{p}^3 \boldsymbol{X}_w) - (\boldsymbol{p}^1 \boldsymbol{X}_w) = 0 \implies (u \boldsymbol{p}^3 - \boldsymbol{p}^1) \boldsymbol{X}_w = 0$$
+$$u (\mathbf{p}^3 \mathbf{X}_w) - (\mathbf{p}^1 \mathbf{X}_w) = 0 \implies (u \mathbf{p}^3 - \mathbf{p}^1) \mathbf{X}_w = 0$$
 
-$$v (\boldsymbol{p}^3 \boldsymbol{X}_w) - (\boldsymbol{p}^2 \boldsymbol{X}_w) = 0 \implies (v \boldsymbol{p}^3 - \boldsymbol{p}^2) \boldsymbol{X}_w = 0$$
+$$v (\mathbf{p}^3 \mathbf{X}_w) - (\mathbf{p}^2 \mathbf{X}_w) = 0 \implies (v \mathbf{p}^3 - \mathbf{p}^2) \mathbf{X}_w = 0$$
 
 For a single camera, this forms a $2 \times 4$ matrix equation:
 
 $$\begin{bmatrix} 
-u \boldsymbol{p}^3 - \boldsymbol{p}^1 \\ 
-v \boldsymbol{p}^3 - \boldsymbol{p}^2 
-\end{bmatrix} \boldsymbol{X}_w = \boldsymbol{0}$$
+u \mathbf{p}^3 - \mathbf{p}^1 \\ 
+v \mathbf{p}^3 - \mathbf{p}^2 
+\end{bmatrix} \mathbf{X}_w = \mathbf{0}$$
 
-But we have 3 unknowns in $\boldsymbol{X}_w $ (we don't care about the homogenous coordinate scale), so we need at least two cameras to solve (they will form a $4 \times 4$ matrix equation).
+But we have 3 unknowns in $\mathbf{X}_w $ (we don't care about the homogenous coordinate scale), so we need at least two cameras to solve (they will form a $4 \times 4$ matrix equation).
 
 ### Generalizing to Multi-View
 
-Since we track features across $N$ views (where $N \geq 2$), we can stack these constraints into a single over-determined system. For $N$ cameras, we construct a matrix $\boldsymbol{A}$ of size $2N \times 4$. For a track observed in views $i = 1 \dots N$ at pixels $(u_i, v_i)$:
+Since we track features across $N$ views (where $N \geq 2$), we can stack these constraints into a single over-determined system. For $N$ cameras, we construct a matrix $\mathbf{A}$ of size $2N \times 4$. For a track observed in views $i = 1 \dots N$ at pixels $(u_i, v_i)$:
 
-$$\boldsymbol{A} = 
+$$\mathbf{A} = 
 \begin{bmatrix}
-u_1 \boldsymbol{p}_1^3 - \boldsymbol{p}_1^1 \\
-v_1 \boldsymbol{p}_1^3 - \boldsymbol{p}_1^2 \\
-u_2 \boldsymbol{p}_2^3 - \boldsymbol{p}_2^1 \\
-v_2 \boldsymbol{p}_2^3 - \boldsymbol{p}_2^2 \\
+u_1 \mathbf{p}_1^3 - \mathbf{p}_1^1 \\
+v_1 \mathbf{p}_1^3 - \mathbf{p}_1^2 \\
+u_2 \mathbf{p}_2^3 - \mathbf{p}_2^1 \\
+v_2 \mathbf{p}_2^3 - \mathbf{p}_2^2 \\
 \vdots \\
-u_N \boldsymbol{p}_N^3 - \boldsymbol{p}_N^1 \\
-v_N \boldsymbol{p}_N^3 - \boldsymbol{p}_N^2
+u_N \mathbf{p}_N^3 - \mathbf{p}_N^1 \\
+v_N \mathbf{p}_N^3 - \mathbf{p}_N^2
 \end{bmatrix}$$
 
 We must now solve the homogeneous linear system:
 
-$$\boldsymbol{A} \boldsymbol{X}_w = \boldsymbol{0}$$
+$$\mathbf{A} \mathbf{X}_w = \mathbf{0}$$
 
-Having said that, we seek a non-zero solution for $\boldsymbol{X}_w$. This is because of noise in measurements (pixel quantization or feature extraction error for example), so the rays will not intersect perfectly. In real life, there is no $\boldsymbol{X}_w$ that satisfies $\boldsymbol{A} \boldsymbol{X}_w = \boldsymbol{0}$ exactly. Instead, we formulate this as a least squares minimization problem:
+Having said that, we seek a non-zero solution for $\mathbf{X}_w$. This is because of noise in measurements (pixel quantization or feature extraction error for example), so the rays will not intersect perfectly. In real life, there is no $\mathbf{X}_w$ that satisfies $\mathbf{A} \mathbf{X}_w = \mathbf{0}$ exactly. Instead, we formulate this as a least squares minimization problem:
 
-$$\min_{\boldsymbol{X}_w} ||\boldsymbol{A} \boldsymbol{X}_w||^2 \qquad \text{subject to } ||\boldsymbol{X}_w|| = 1$$
+$$\min_{\mathbf{X}_w} ||\mathbf{A} \mathbf{X}_w||^2 \qquad \text{subject to } ||\mathbf{X}_w|| = 1$$
 
-We constrain the norm to 1 just to avoid the trivial solution $\boldsymbol{X}_w = \boldsymbol{0}$ and to fix the homogeneous scale. The solution is given by Singular Value Decomposition (SVD). Decompose $\boldsymbol{A}$ into:
+We constrain the norm to 1 just to avoid the trivial solution $\mathbf{X}_w = \mathbf{0}$ and to fix the homogeneous scale. The solution is given by Singular Value Decomposition (SVD). Decompose $\mathbf{A}$ into:
 
-$$\boldsymbol{A} = \boldsymbol{U} \boldsymbol{\Sigma} \boldsymbol{V}^T$$
+$$\mathbf{A} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T$$
 
-- $\boldsymbol{U}$: Orthogonal matrix spanning the column space.
+- $\mathbf{U}$: Orthogonal matrix spanning the column space.
 
-- $\boldsymbol{\Sigma}$: Diagonal matrix of singular values (scalars $\sigma_1 \geq \sigma_2 \geq \sigma_3 \geq \sigma_4 \geq 0$).
+- $\mathbf{\Sigma}$: Diagonal matrix of singular values (scalars $\sigma_1 \geq \sigma_2 \geq \sigma_3 \geq \sigma_4 \geq 0$).
 
-- $\boldsymbol{V}$: Orthogonal matrix spanning the row space.
+- $\mathbf{V}$: Orthogonal matrix spanning the row space.
 
-The vector $\boldsymbol{X}_w$ that minimizes $||\boldsymbol{A} \boldsymbol{X}_w||$ corresponds to the column of $\boldsymbol{V}$ associated with the smallest singular value. Since SVD sorts singular values largest-to-smallest, this is the last column of $\boldsymbol{V}$ (or the last row of $\boldsymbol{V}^T$). The SVD returns a homogeneous vector $\boldsymbol{X}_{svd} = [x, y, z, w]^T$. Now to convert this back to Euclidean space for our estimated 3D position of the feature in the Minecraft world frame, we do:
+The vector $\mathbf{X}_w$ that minimizes $||\mathbf{A} \mathbf{X}_w||$ corresponds to the column of $\mathbf{V}$ associated with the smallest singular value. Since SVD sorts singular values largest-to-smallest, this is the last column of $\mathbf{V}$ (or the last row of $\mathbf{V}^T$). The SVD returns a homogeneous vector $\mathbf{X}_{svd} = [x, y, z, w]^T$. Now to convert this back to Euclidean space for our estimated 3D position of the feature in the Minecraft world frame, we do:
 
-$$\boldsymbol{X}_{final} = \begin{bmatrix} 
+$$\mathbf{X}_{final} = \begin{bmatrix} 
 x/w \\ 
 y/w \\ 
 z/w 
