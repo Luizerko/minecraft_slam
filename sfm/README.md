@@ -457,10 +457,11 @@ z/w
 
 <div align="center">
     <br><br>
+    <img src="assets/small_corridor_experiment.png", width="330">
     <img src="assets/raw_triangulation.png", width="300">
 </div>
 <div align="center">
-    <span>Illustration of a point-cloud using SIFT features for matching and triangulation on 2/3-length tracks on one of our experiments (the small corridor with a left turn). The point-cloud is reasonable in terms of the overall distribution of points, capturing the straight corridor with a left turn structure and keeping points (like for torches) on more-or-less the correct position relative to the corridor. Having said that, it's clear that the reconstruction is far from perfect, with a bunch of points placed outside the actual corridor, floor and ground mixing up and a lot of noise on point position in general.</span>
+    <span>Illustration of the small corridor experiment original structure (left) and a reconstructed point-cloud version of it (right) using SIFT features for matching and triangulation on 2/3-length tracks. The point-cloud is reasonable in terms of the overall distribution of points, capturing the straight corridor with a left turn structure and keeping points (like for torches) on more-or-less the correct position relative to the corridor. Having said that, it's clear that the reconstruction is far from perfect, with a bunch of points placed outside the actual corridor, floor and ground mixing up and a lot of noise on point position in general.</span>
     <br><br>
 </div>
 
