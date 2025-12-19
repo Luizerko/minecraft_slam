@@ -119,7 +119,7 @@ def init_gaussians(K, image, depth, max_depth=20, device='cuda'):
 
 
 # Computing Open3D intrinsics
-def o3d_intrinsics(K):
+def _o3d_intrinsics(K):
     fx = K[0, 0].item()
     fy = K[1, 1].item()
     cx = K[0, 2].item()
@@ -140,7 +140,7 @@ def tracking(K, curr_rgb, curr_depth, prev_rgb, \
              prev_depth, max_depth=20.0, \
              prev_camera_pose=np.eye(4)):
     # Open3D intrinsics computation
-    K_o3d = o3d_intrinsics(K)
+    K_o3d = _o3d_intrinsics(K)
     
     # Creating Open3D RGBD images (and keeping colors 
     # for colored ICP later)
@@ -186,8 +186,19 @@ def tracking(K, curr_rgb, curr_depth, prev_rgb, \
     # scenario where texture is very much repeated
     result_icp = o3d.pipelines.registration.registration_colored_icp(
         pcd_curr, pcd_prev,
-        max_correspondence_distance=voxel_size*2,
+        max_correspondence_distance=voxel_size*5,
         init=trans_init,
+        criteria=o3d.pipelines.registration.ICPConvergenceCriteria(
+            relative_fitness=1e-6, relative_rmse=1e-6, max_iteration=50
+        )
+    )
+
+    # Doing the process again for multi-scale ICP
+    current_transform_guess = result_icp.transformation 
+    result_icp = o3d.pipelines.registration.registration_colored_icp(
+        pcd_curr, pcd_prev, # Use original high-res clouds
+        max_correspondence_distance=voxel_size/2,
+        init=current_transform_guess,
         criteria=o3d.pipelines.registration.ICPConvergenceCriteria(
             relative_fitness=1e-6, relative_rmse=1e-6, max_iteration=50
         )
@@ -219,7 +230,7 @@ def tracking(K, curr_rgb, curr_depth, prev_rgb, \
 def visualize_tracking(K, curr_rgb, curr_depth, prev_rgb, prev_depth, \
                        relative_motion, max_depth=20.0):
     # Open3D intrinsics computation
-    K_o3d = o3d_intrinsics(K)
+    K_o3d = _o3d_intrinsics(K)
     
     # Creating both point-clouds
     prev_rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
@@ -244,7 +255,7 @@ def visualize_tracking(K, curr_rgb, curr_depth, prev_rgb, prev_depth, \
     # Applying the calculated transform to the 
     # current cloud, so that it (ideally) fits the
     # previous cloud
-    # pcd_curr.transform(relative_motion)
+    pcd_curr.transform(relative_motion)
 
     # Flipping Y and Z to match Open3D's coordinate system
     # (OpenCV is Y-Down and Z-Forward while Open3D is 
@@ -377,7 +388,7 @@ if __name__ == '__main__':
         visualize_gaussians_point_cloud(xyz, colors)
 
     # Estimating motion
-    img_path_1 = poses_df["image_path"].iloc[start_frame+2]
+    img_path_1 = poses_df["image_path"].iloc[start_frame+1]
     image_1 = cv2.imread(img_path_1)
     image_1 = cv2.cvtColor(image_1, cv2.COLOR_BGR2RGB)
     depth_1 = cv2.imread(img_path_1.replace("rgb", "d").replace("ppm", "pgm"), -1)
