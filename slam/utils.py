@@ -1,5 +1,6 @@
 import ast
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import open3d as o3d
@@ -7,10 +8,12 @@ import pandas as pd
 import sys
 import torch
 
+from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from plyfile import PlyData, PlyElement
 
 # Building camera intrinsics K
-def camera_intrinsics(image_width=640, image_height=360, horizontal_fov_deg=70.0):
+def camera_intrinsics(image_width=640, image_height=360, \
+                      horizontal_fov_deg=70.0, device='cuda'):
     # Building intrinsics matrix (camera coords to pixel coords)
     w, h = image_width, image_height
 
@@ -25,9 +28,9 @@ def camera_intrinsics(image_width=640, image_height=360, horizontal_fov_deg=70.0
     cx, cy = w / 2.0, h / 2.0
 
     # Finally building the matrix
-    K = torch.Tensor([[fx, 0.0, cx],\
+    K = torch.tensor([[fx, 0.0, cx],\
                       [0.0, fy, cy],\
-                      [0.0, 0.0, 1.0]])
+                      [0.0, 0.0, 1.0]], device=device)
 
     return K
 
@@ -40,7 +43,7 @@ def _inverse_sigmoid(x):
 # Initializing 3D Gaussians based on RGB-D images. We 
 # initialize one gaussian per pixel and we'll reduce
 # later during optimization
-def init_gaussians(K, image, depth, max_depth=20, device='cuda'):
+def init_gaussians(K, image, depth, near=0.1, far=20.0, device='cuda'):
     # Preparing input
     if image.max() > 1.0:
         image = image / 255.0
@@ -57,10 +60,11 @@ def init_gaussians(K, image, depth, max_depth=20, device='cuda'):
     v = i.flatten()
     z = depth.flatten()
     
-    # Filtering out invalid depth (0.1 to avoid very close
-    # points collpasing into the camera and max_depth to
-    # restrict our range of view and reconstruction)
-    valid_mask = (z >= 0.1) & (z <= max_depth)
+    # Filtering out invalid depth (outside near and far,
+    # 0.1 to avoid very close points collpasing into the 
+    # camera and max_depth to restrict our range of view 
+    # and reconstruction)
+    valid_mask = (z >= near) & (z <= far)
     u = u[valid_mask]
     v = v[valid_mask]
     z = z[valid_mask]
@@ -137,24 +141,28 @@ def _o3d_intrinsics(K):
 # point-cloud from frame t with point-cloud of 
 # frame t-1 using ICP
 def tracking(K, curr_rgb, curr_depth, prev_rgb, \
-             prev_depth, max_depth=20.0, \
+             prev_depth, near=0.1, far=20.0, \
              prev_camera_pose=np.eye(4)):
     # Open3D intrinsics computation
     K_o3d = _o3d_intrinsics(K)
+
+    # Filtering near and far points
+    prev_depth[(prev_depth < near) | (prev_depth > far)] = 0.0
+    curr_depth[(curr_depth < near) | (curr_depth > far)] = 0.0
     
     # Creating Open3D RGBD images (and keeping colors 
     # for colored ICP later)
     curr_rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
         o3d.geometry.Image(curr_rgb),
         o3d.geometry.Image(curr_depth.astype(np.float32)),
-        depth_scale=1.0, depth_trunc=max_depth,
+        depth_scale=1.0, depth_trunc=far,
         convert_rgb_to_intensity=False
     )
     
     prev_rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
         o3d.geometry.Image(prev_rgb),
         o3d.geometry.Image(prev_depth.astype(np.float32)),
-        depth_scale=1.0, depth_trunc=max_depth,
+        depth_scale=1.0, depth_trunc=far,
         convert_rgb_to_intensity=False
     )
 
@@ -228,20 +236,24 @@ def tracking(K, curr_rgb, curr_depth, prev_rgb, \
 # Visualizing tracking to make sure we computed
 # it correctly
 def visualize_tracking(K, curr_rgb, curr_depth, prev_rgb, prev_depth, \
-                       relative_motion, max_depth=20.0):
+                       relative_motion, near=0.1, far=20.0):
     # Open3D intrinsics computation
     K_o3d = _o3d_intrinsics(K)
+    
+    # Filtering near and far points
+    prev_depth[(prev_depth < near) | (prev_depth > far)] = 0.0
+    curr_depth[(curr_depth < near) | (curr_depth > far)] = 0.0
     
     # Creating both point-clouds
     prev_rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
         o3d.geometry.Image(prev_rgb), \
         o3d.geometry.Image(prev_depth.astype(np.float32)),
-        depth_scale=1.0, depth_trunc=max_depth, convert_rgb_to_intensity=False
+        depth_scale=1.0, depth_trunc=far, convert_rgb_to_intensity=False
     )
     curr_rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
         o3d.geometry.Image(curr_rgb), \
         o3d.geometry.Image(curr_depth.astype(np.float32)),
-        depth_scale=1.0, depth_trunc=max_depth, convert_rgb_to_intensity=False
+        depth_scale=1.0, depth_trunc=far, convert_rgb_to_intensity=False
     )
     
     pcd_prev = o3d.geometry.PointCloud.create_from_rgbd_image(prev_rgbd, K_o3d)
@@ -267,6 +279,163 @@ def visualize_tracking(K, curr_rgb, curr_depth, prev_rgb, prev_depth, \
     o3d.visualization.draw_geometries([pcd_prev, pcd_curr], 
                                       window_name="Tracking Verification",
                                       width=800, height=600)
+
+
+#######################################################
+##### LEGACY CODE FOR WHEN WE WERE BUILDING OUR   ##### 
+##### OWN DIFFERENTIABLE RASTERIZER, BUT WE OPTED #####
+##### TO GO FOR THE diff-gaussian-rasterizer      #####
+##### INSTEAD FOR RENDERING SPEED.                #####
+#######################################################
+# Building rotation matrices from quaternions
+def _build_rotation(q):
+    R = torch.zeros((q.shape[0], 3, 3), device=q.device)
+    r = q[:, 0]
+    x = q[:, 1]
+    y = q[:, 2]
+    z = q[:, 3]
+
+    R[:, 0, 0] = 1 - 2 * (y*y + z*z)
+    R[:, 0, 1] = 2 * (x*y - r*z)
+    R[:, 0, 2] = 2 * (x*z + r*y)
+    R[:, 1, 0] = 2 * (x*y + r*z)
+    R[:, 1, 1] = 1 - 2 * (x*x + z*z)
+    R[:, 1, 2] = 2 * (y*z - r*x)
+    R[:, 2, 0] = 2 * (x*z - r*y)
+    R[:, 2, 1] = 2 * (y*z + r*x)
+    R[:, 2, 2] = 1 - 2 * (x*x + y*y)
+
+    return R
+
+# Building 3D covariance matrix from rotation and scale
+def _compute_covariance_3d(scales, quaternions):
+    # Creating diagonal matrix S
+    S = torch.zeros((scales.shape[0], 3, 3), device=scales.device)
+    S[:, 0, 0] = scales[:, 0]
+    S[:, 1, 1] = scales[:, 1]
+    S[:, 2, 2] = scales[:, 2]
+    
+    # Computing rotation matrix R
+    R = _build_rotation(quaternions)
+    
+    # Sigma = R @ S @ S^T @ R^T, so we do 
+    # (R@S) @ (R@S)^T, with RS as batch 
+    # matrix multiplication
+    RS = torch.bmm(R, S)
+    sigma = torch.bmm(RS, RS.transpose(1, 2))
+    
+    return sigma
+
+
+# Projecting 3D Gaussians into 2D screen for differentiable 
+# rendering
+def _project_gaussians(means_world, cov_world, K, pose, \
+                      width, height, max_depth=20.0):
+    # Using poses to get extrinsics (we have T_wc, we need T_cw)
+    R_wc = pose[:3, :3]
+    t_wc = pose[:3, 3]
+    W = torch.hstack([R_wc.T, (-R_wc.T@t_wc).unsqueeze(-1)])
+    W = torch.vstack([W, [0, 0, 0, 1]])
+    R_cw = W[:3, :3]
+    t_cw = W[:3, 3]
+    
+    # Transforming Gaussian means to camera space
+    means_cam = torch.matmul(R_cw, means_world.unsqueeze(-1)).squeeze(-1) + t_cw
+    x, y, z = means_cam[:, 0], means_cam[:, 1], means_cam[:, 2]
+    
+    # Transforming covariance to camera space, inner
+    # part of Sigma_2D = J (R Sigma R^T) J^T
+    cov_cam = torch.matmul(R_cw.unsqueeze(0), torch.matmul(cov_world, (R_cw.T).unsqueeze(0)))
+    
+    # Constructing the Jacobian d(u, v)/d(x, y, z)
+    fx = K[0, 0]
+    fy = K[1, 1]
+    cx = K[0, 2]
+    cy = K[1, 2]
+    
+    z_clamped = z.clamp(min=0.001) 
+    
+    du_dx = fx / z_clamped
+    # du_dy = 0
+    du_dz = - (fx * x) / (z_clamped**2) 
+    # dv_dx = 0
+    dv_dy = fy / z_clamped
+    dv_dz = -(fy * y) / (z_clamped**2)
+    
+    J = torch.zeros((means_world.shape[0], 2, 3), device=means_world.device)
+    J[:, 0, 0] = du_dx
+    J[:, 0, 2] = du_dz
+    J[:, 1, 1] = dv_dy
+    J[:, 1, 2] = dv_dz
+    
+    # Projecting to 2D covariance, Sigma_2D = J Sigma_cam J^T
+    cov_screen = torch.bmm(J, torch.bmm(cov_cam, J.transpose(1, 2)))
+    
+    # Computing screen coordinates (explicit version 
+    # of intrinsics matrix multiplication)
+    u = (x * fx) / z_clamped + cx
+    v = (y * fy) / z_clamped + cy
+    means_screen = torch.hstack([u, v])
+    
+    # Filtering near and far points and filtering points 
+    # outside image bounds
+    near_far_mask = (z > 0.1) & (z < max_depth)
+    in_bounds_mask = (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    valid_mask = near_far_mask & in_bounds_mask
+    
+    return means_screen[valid_mask], cov_screen[valid_mask], \
+        z[valid_mask], valid_mask
+#######################################################
+##### LEGACY CODE ENDS HERE                       ##### 
+#######################################################
+
+
+# Rendering Gaussians
+def render_gaussians(xyz, scales, rotations, opacities, \
+                     f_dc, K, pose, width, height, near=0.1, \
+                     far=20.0):
+    # Using poses to get extrinsics (we have T_wc, we need T_cw)
+    R_wc = pose[:3, :3]
+    t_wc = pose[:3, 3]
+    W = torch.hstack([R_wc.T, (-R_wc.T@t_wc).unsqueeze(-1)])
+    W = torch.vstack([W, torch.tensor([[0, 0, 0, 1]], device=W.device)])
+
+    # Constructing standard OpenGL-style projection matrix
+    fx, fy, _, _ = K[0,0], K[1,1], K[0,2], K[1,2]
+    tan_fov_x = width / (2 * fx)
+    tan_fov_y = height / (2 * fy)
+    
+    proj = torch.zeros((4, 4), device=xyz.device)
+    proj[0, 0] = 1/tan_fov_x
+    proj[1, 1] = 1/tan_fov_y
+    proj[2, 2] = far/(far-near)
+    proj[3, 2] = -(far*near)/(far-near)
+    proj[2, 3] = 1.0
+    full_proj = (W@proj)
+
+    # Setting up rasterizer
+    raster_settings = GaussianRasterizationSettings(
+        image_height=int(height), image_width=int(width), \
+        tanfovx=tan_fov_x, tanfovy=tan_fov_y,
+        bg=torch.tensor([0, 0, 0], dtype=torch.float32, device=xyz.device),
+        scale_modifier=1.0, viewmatrix=W.T, projmatrix=full_proj,
+        sh_degree=0, campos=pose[:3, 3], prefiltered=False,
+        debug=False
+    )
+    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+    
+    # Rasterizing 
+    rendered_image, radii = rasterizer(
+        means3D=xyz.float(),
+        means2D=torch.zeros_like(xyz[:, :2], device=xyz.device, \
+                                 requires_grad=True).float(), \
+        shs=f_dc.unsqueeze(1).float(), \
+        opacities=opacities.float(),
+        scales=scales.float(),
+        rotations=torch.nn.functional.normalize(rotations).float(),
+    )
+    
+    return rendered_image
 
 
 # Saving ply file for plotting the splat
@@ -347,19 +516,23 @@ if __name__ == '__main__':
     try:
         debug = ast.literal_eval(sys.argv[1])
         start_frame = int(sys.argv[2])
-        max_depth = float(sys.argv[3])
+        near = float(sys.argv[3])
+        far = float(sys.argv[4])
     except:
         debug = True
         start_frame = 0
-        max_depth = 20.0
+        near = 0.1
+        far = 20.0
 
     # Creating intrinsics K
     poses_df = pd.read_csv('../data/small_corridor/poses.txt')
     poses_df.columns = ['X', 'Y', 'Z', 'yaw', 'pitch', 'image_path']
     image_width, image_height = 640, 360
     horizontal_fov_deg = 70.0
+    device = torch.device("cuda" if torch.cuda.is_available() \
+                          else "cpu")
     K = camera_intrinsics(image_width, image_height, \
-                          horizontal_fov_deg)
+                          horizontal_fov_deg, device)
     
     # Reading and processing data
     img_path_0 = poses_df["image_path"].iloc[start_frame]
@@ -374,12 +547,9 @@ if __name__ == '__main__':
     depth_0 = depth_0/(255/10)
     
     # Initializing gaussians for frame and visualizing them
-    device = torch.device("cuda" if \
-                          torch.cuda.is_available() \
-                          else "cpu")
     xyz, colors, scales, log_scales, rotations, opacities, \
         logit_opacities, f_dc = init_gaussians(K, image_0, depth_0, \
-                                               max_depth, device)
+                                               near, far, device)
     
     if debug:
         os.makedirs("../data/slam_output/", exist_ok=True)
@@ -402,12 +572,31 @@ if __name__ == '__main__':
     
     pose_1, relative_motion = tracking(K, image_1, \
                                          depth_1, image_0, \
-                                         depth_0, max_depth, \
+                                         depth_0, near, far, \
                                          pose_0)
 
     # Visualizing tracking
     if debug:
         visualize_tracking(K, image_1, depth_1, image_0, \
-                           depth_0, relative_motion, max_depth)
+                           depth_0, relative_motion, near, far)
         
+
+    # Testing rendering for mapping pipeline
+    if debug:
+        pose_0_torch = torch.from_numpy(pose_0).float().to(device)
+        pose_1_torch = torch.from_numpy(pose_1).float().to(device)
+        with torch.no_grad():
+            image_out = render_gaussians(
+                xyz, scales, rotations, opacities, f_dc, \
+                K, pose_1_torch, image_width, image_height, \
+                near, far
+            )
+        image_display = image_out.permute(1, 2, 0).detach().cpu().numpy()
+        image_display = np.clip(image_display, 0, 1)
+        
+        plt.imshow(image_display)
+        plt.axis('off')
+        plt.title("Initial Gaussian splatting render from pose in frame 2")
+        plt.show()
+
     # Visualizing mapping
