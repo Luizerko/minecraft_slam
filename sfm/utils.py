@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import sys
+from scipy.optimize import least_squares
 
 
 # Building camera intrinsics K, extrinsics [R|t] and full projection P = K [R|t]
@@ -258,6 +259,42 @@ def triangulate_track_multi_view(Ps, keypoints_list, track):
 
     return X
 
+# Least squares optimization to refine 3D points only
+def structure_only_bundle_adjustment(Ps, tracks, keypoints_list, points_3d, track_ids):
+    # Collecting the 2D observations for each 3D point
+    Us = np.zeros((Ps.shape[0], len(points_3d))) # shape (I, J)
+    Vs = np.zeros((Ps.shape[0], len(points_3d))) # shape (I, J)
+
+    #Constructing the visiblity matrix (if point j is seen in frame i)
+    Visibility = np.zeros((Ps.shape[0], len(points_3d))) # shape (I, J)
+    
+    for i in range(len(points_3d)):
+        track = tracks[track_ids[i]]
+        for tr in track.items():
+            f_idx, kp_idx = tr
+            u, v = keypoints_list[f_idx][kp_idx].pt
+            Us[f_idx, i] = u
+            Vs[f_idx, i] = v
+            Visibility[f_idx, i] = 1
+    # Defining residuals function to minimize        
+    def residuals(points_3d_flat):
+        points_3d = points_3d_flat.reshape(-1, 3)
+        Points_3d_homog = np.hstack([points_3d, np.ones((points_3d.shape[0], 1))])
+        proj = np.matmul(Ps, Points_3d_homog.T)  # Shape: (I, 3, 4) x (4, J) = (I, 3, J)
+        # Normalize by Z
+        proj /= proj[:, 2:3, :]
+        # Remove the Z coordinate,
+        proj_uv = proj[:, :2, :].transpose(0, 2, 1) # Shape (I, J, 2)
+        obs = np.stack([Us, Vs], axis=2) 
+        residuals = (Visibility[:,:,np.newaxis] * (obs - proj_uv))
+        residuals = residuals[Visibility == 1].ravel()
+        return residuals
+
+    points_3d_flat = points_3d.ravel()
+    lr_result = least_squares(residuals, points_3d_flat, method='trf', verbose=2, max_nfev=20)
+    optimized_points = lr_result.x.reshape(-1, 3)
+    # points_3d_opt = optimized_points * scale + centroid
+    return optimized_points
 
 # Testing 3D point cloud generation pipeline
 if __name__ == '__main__':
@@ -307,6 +344,7 @@ if __name__ == '__main__':
 
     #Because are the Ks are the same
     K = Ks[0]
+    print(K)
 
     if debug:
         # Sanity checking camera matrices
@@ -411,6 +449,8 @@ if __name__ == '__main__':
     points_3d = np.array(points_3d)
     print("\nTriangulated 3D points shape:", points_3d.shape[0])
     
+    #optimized_points_3d = structure_only_bundle_adjustment(np.array(Ps), tracks, keypoints_list, points_3d)
+    #print("\nTriangulated 3D points shape:", optimized_points_3d.shape[0])
     if debug:
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')

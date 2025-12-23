@@ -10,7 +10,8 @@ from utils import (
     match_features,
     filter_matches,
     build_tracks_from_pairs,
-    triangulate_track_multi_view
+    triangulate_track_multi_view,
+    structure_only_bundle_adjustment
 )
 
 
@@ -69,22 +70,26 @@ def process_windows(poses_df, descriptor, horizontal_fov_deg, \
 
     # Global multi-view triangulation
     points_3d = []
+    track_ids = []
     colors = []
-    for tr in tracks:
+    for idx, tr in enumerate(tracks):
         X = triangulate_track_multi_view(Ps, keypoints_list, tr)
         if X is None:
             continue
         points_3d.append(X)
-        
+        track_ids.append(idx)
         # Color Sampling
         f_idx = list(tr.keys())[0]
         kp_idx = tr[f_idx]
         u, v = keypoints_list[f_idx][kp_idx].pt
+        if idx == 0:
+            print(u, v)
         u = np.clip(int(u), 0, image_width-1)
         v = np.clip(int(v), 0, image_height-1)
         colors.append(images_rgb[f_idx][v, u])
 
     points_3d = np.array(points_3d)
+    points_3d = structure_only_bundle_adjustment(np.array(Ps), tracks, keypoints_list, points_3d, track_ids)
     colors = np.array(colors)
     print(points_3d.shape)
 
